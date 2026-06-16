@@ -20,6 +20,14 @@ This repo is the expedition base. From here, we deploy agents into the wild, one
 
 ---
 
+## Architecture
+
+- **Hexagonal backend.** Ports and adapters keep game rules clean — swap JSON for SQLite without changing the summon loop.
+- **Event-driven agents.** When a Ranger spots something, every listening agent hears it. No direct imports, no tight coupling.
+- **Reflex fullstack frontend.** Real-time reactive UI, Python end-to-end, no JavaScript required. The world lives in your browser.
+
+---
+
 ## Day 1 — Scout Says Hello
 
 > *"I am Scout. I only observe and report."*
@@ -45,6 +53,34 @@ A two-function Python module gave Scout the ability to feel time — not as a nu
 The system prompt now carries a timestamp into the model's context, and Scout adapts its language to the phase it finds itself in. A midnight observation reads differently than a dawn report. The world began to breathe on its own schedule.
 
 **[tools/time_tool.py](tools/time_tool.py) — stdlib only. No new dependencies. Just time.**
+
+---
+
+## Day 3 — Scout Remembers
+
+> *"I remember what I have seen."*
+
+Day three, and Scout gained **memory**.
+
+The thought-seed → intent-router → summoned-agent → memory loop is proven. A player's raw input is classified by keywords (Ranger for "scan", Archivist for "log", Strategist for "plan"), routed to the matching agent, saved as a `ThoughtSeed` in a JSONL file, and announced as an `AgentSummoned` event on the bus.
+
+All three tests pass:
+
+```
+tests/test_summon_service.py::test_summon_routes_to_ranger PASSED
+tests/test_summon_service.py::test_summon_emits_event      PASSED
+tests/test_summon_service.py::test_summon_defaults_to_scout PASSED
+```
+
+The architecture is **hexagonal + event-driven** ("Summon & Signal"). Memory storage is an adapter — today JSONL, tomorrow SQLite or a blockchain. The summon loop never changes.
+
+**[cli.py](cli.py) — 27 lines. One proof. Day 3 committed.**
+
+```bash
+python3 cli.py "scan the northern ridge"
+# 📡 Signal emitted: Ranger summoned at 2026-06-16T22:35:38
+# 💾 Memory saved to: data/thought_seeds.jsonl
+```
 
 ---
 
@@ -83,6 +119,7 @@ echo "HF_TOKEN=your_token_here" > .env
 
 | Milestone | What | Status |
 |-----------|------|--------|
+| 🕐 Day 3 | Scout remembers — thought-seed → memory loop | ✅ Done |
 | 🕐 Day 2 | Scout has a clock — time-aware observations | ✅ Done |
 | 🗺️ Territory Graph | Agents can reference named locations and spatial relationships | Next |
 | 🛰️ Ranger Agent | First field agent — real observation, real scan data | Upcoming |

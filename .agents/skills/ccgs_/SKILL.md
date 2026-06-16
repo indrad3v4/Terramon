@@ -110,6 +110,28 @@ Cloned at `.agents/skills/ccgs/`:
 | ui-programmer | Frontend Engineer — Reflex PWA |
 | qa-lead | QA Engineer — pytest, Scout validation |
 
+## Lens Toolkit (Schell-Inspired)
+
+5 Terramon-relevant lenses derived from Jesse Schell's *The Art of Game Design*. Each role applies a primary + secondary lens on every task.
+
+| Lens | Question It Asks | What It Reveals |
+|------|-----------------|-----------------|
+| **Lens of the Living World** | "Does the world feel alive even when the player isn't watching?" | Passive agent activity, time-based state changes, ambient events |
+| **Lens of Territory** | "Does this place have meaning beyond its coordinates?" | Named regions, owner feelings, boundary tension |
+| **Lens of Emergence** | "Can two simple rules create something surprising?" | Agent-agent interactions, resource conflicts, spontaneous events |
+| **Lens of the Unseen** | "What hints can I give without showing the full truth?" | Fog of war, agent rumors, partial map reveals |
+| **Lens of Memory** | "How does past action shape future possibility?" | Agent history, territory memory, persistent consequences |
+
+| Role | Primary Lens | Secondary Lens |
+|------|-------------|---------------|
+| Strategist | Lens of Emergence | Lens of Territory |
+| Game Designer | Lens of Territory | Lens of Memory |
+| Systems Designer | Lens of Memory | Lens of the Living World |
+| UI Programmer | Lens of the Unseen | Lens of Territory |
+| QA Lead | Lens of the Living World | Lens of Emergence |
+
+Usage: Put on primary lens → describe what you see. Switch to secondary → describe what changed. Write one falsifiable claim per lens.
+
 ## How to Use
 
 1. `read_file(".agents/skills/ccgs/.claude/agents/<name>.md")` — read agent prompts
