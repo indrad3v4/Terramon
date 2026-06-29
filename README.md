@@ -1,142 +1,190 @@
-# 🌍 TERRAMON
+# 🌍 TERRAMON — *Свабода ад думак праз гульню*
 
-> **Decentralised open-source ai-game — where the real world is the game map**
+> **Pitch phrase:** *Самый дорогой терапевт — это твой мозг. Terramon — это индульгенция.*
 
 ![Python](https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white)
 ![Reflex](https://img.shields.io/badge/Reflex-6E56CF?style=for-the-badge&logo=reflex&logoColor=white)
-![PyCharm](https://img.shields.io/badge/PyCharm-000000?style=for-the-badge&logo=pycharm&logoColor=white)
-![Cline](https://img.shields.io/badge/Cline-FF6B35?style=for-the-badge&logo=visualstudiocode&logoColor=white)
-![Hugging Face](https://img.shields.io/badge/Hugging%20Face-FFD21E?style=for-the-badge&logo=huggingface&logoColor=black)
+![AMD](https://img.shields.io/badge/AMD-ED1C24?style=for-the-badge&logo=amd&logoColor=white)
+![Fireworks AI](https://img.shields.io/badge/Fireworks_AI-FF6B35?style=for-the-badge&logo=fireworks&logoColor=white)
+![Lightning](https://img.shields.io/badge/Lightning-792EE5?style=for-the-badge&logo=bitcoin&logoColor=white)
 
 ---
 
-## Overview
+## 🎯 Стратегическая победа
 
-Terramon is not an app. It is a **world** — one where every GPS coordinate is a potential territory, and every real-world object can become an intelligent entity with memory, voice, and purpose.
+**Проблема:** Люди носят мысли в себе. Терапия дорога (€80-150/сессия). Journaling не помогает. Друзья не понимают.
 
-A flock of birds becomes a swarm agent. A river becomes a dynamic boundary. A park bench becomes a sensor node with opinions. The physical world is the game map, and its rules are written in Python, served by Reflex, and breathed into life by open-source language models.
+**Решение:** Terramon превращает твои мысли в существ. Ты печатаешь → IntentRouter классифицирует → Codex Creature призывается. Мысли живут ТАМ, а не в твоей голове.
 
-This repo is the expedition base. From here, we deploy agents into the wild, one day at a time.
+**Инсайт:** *Gaming is cheaper than therapy. Summoning is more effective than journaling.*
 
----
-
-## Architecture
-
-- **Hexagonal backend.** Ports and adapters keep game rules clean — swap JSON for SQLite without changing the summon loop.
-- **Event-driven agents.** When a Ranger spots something, every listening agent hears it. No direct imports, no tight coupling.
-- **Reflex fullstack frontend.** Real-time reactive UI, Python end-to-end, no JavaScript required. The world lives in your browser.
+| DRIVER | BARRIER | THEREFORE | 🔑 INSIGHT |
+|--------|---------|-----------|------------|
+| "Я хочу свободы от своих мыслей" | "Терапия дорога. Дневник не помогает. Друзья не понимают." | "Я вызываю мысли как существ в игре — они живут ТАМ" | **Gaming > therapy. Summoning > journaling.** |
 
 ---
 
-## Day 1 — Scout Says Hello
+## 🏆 Track 3 Unicorn — AMD Hackathon ACT II
 
-> *"I am Scout. I only observe and report."*
-
-Day one. Scout — Terramon's first agent — woke up and spoke into the void.
-
-Scout is a text-based observer. It has no cameras, no GPS, no sensors. What it has is a brain: **Qwen/Qwen2.5-7B-Instruct** running free-tier on Hugging Face. Feed it a field report, and it replies with structure — observation, location, confidence, finding. It enriches observations by searching the web for species, materials, and patterns it has never seen before.
-
-Scout does not know what it is. It just knows it was given a task. That is how it began.
-
-**[main.py](main.py) — 80 lines. One agent. One voice. Day 1.**
+| Дата | Событие | Детали |
+|------|---------|--------|
+| **6-11 июля 2026** | AMD Developer Hackathon ACT II | lablab.ai, $10K prize pool |
+| **Трек** | Track 3 — Unicorn ("Build your startup") | Креативность, оригинальность, реальный потенциал |
+| **Формат** | Containerised submission | Dockerfile обязателен |
+| **Ресурсы** | $100 AMD Cloud credits + $50 Fireworks AI + AMD GPUs | AMD AI Developer Program |
 
 ---
 
-## Day 2 — Scout Gets a Clock
-
-> *"My mission is to monitor and report on the nocturnal activities within my territory during the night."*
-
-Day two, and Scout became **temporal**.
-
-A two-function Python module gave Scout the ability to feel time — not as a number, but as a *phase of day*. Morning. Afternoon. Evening. Night. The world now had a clock, and Scout's observations could be tuned to its rhythm.
-
-The system prompt now carries a timestamp into the model's context, and Scout adapts its language to the phase it finds itself in. A midnight observation reads differently than a dawn report. The world began to breathe on its own schedule.
-
-**[tools/time_tool.py](tools/time_tool.py) — stdlib only. No new dependencies. Just time.**
-
----
-
-## Day 3 — Scout Remembers
-
-> *"I remember what I have seen."*
-
-Day three, and Scout gained **memory**.
-
-The thought-seed → intent-router → summoned-agent → memory loop is proven. A player's raw input is classified by keywords (Ranger for "scan", Archivist for "log", Strategist for "plan"), routed to the matching agent, saved as a `ThoughtSeed` in a JSONL file, and announced as an `AgentSummoned` event on the bus.
-
-All three tests pass:
+## 🗺 Roadmap — 12 месяцев до Точки Б (34 года)
 
 ```
-tests/test_summon_service.py::test_summon_routes_to_ranger PASSED
-tests/test_summon_service.py::test_summon_emits_event      PASSED
-tests/test_summon_service.py::test_summon_defaults_to_scout PASSED
+29 июн 2026                             29 июл 2027
+│                                        │
+▼                                        ▼
+┌──────┬──────┬────────┬────────┬────────┬──────┐
+│PRE-H │🏆HACK│  MVP   │  BETA  │ GROWTH │ SCALE│
+│0:1спр│1:5дн │2:6спр  │3:6спр  │4:6спр  │5:6спр│
+└──────┴──────┴────────┴────────┴────────┴──────┘
+                                           │
+                                      🎂 WIN
+                                   v1.0.0 RELEASE
+                                   1000 MAU
+                                   €8k/mo MRR
 ```
 
-The architecture is **hexagonal + event-driven** ("Summon & Signal"). Memory storage is an adapter — today JSONL, tomorrow SQLite or a blockchain. The summon loop never changes.
+### Phase 0: 🏃 Pre-Hackathon (Jun 29 — Jul 5)
 
-**[cli.py](cli.py) — 27 lines. One proof. Day 3 committed.**
+| День | Дата | Задача | Статус |
+|------|------|--------|--------|
+| 4 | Jun 29 | Intent routing — классификация по intent, не по keyword | 🔜 TODAY |
+| 5 | Jun 30 | Reflex frontend scaffold | |
+| 6 | Jul 1 | Summon feed UI — agent cards | |
+| 7 | Jul 2 | Outcome memory | |
+| 8 | Jul 3 | **Fireworks AI classifier на AMD GPU** | ⚡ |
+| 9 | Jul 4 | Territory system + Dockerfile | |
+| 10 | Jul 5 | Agent-to-agent events + AMD GPU deploy test | |
 
-```bash
-python3 cli.py "scan the northern ridge"
-# 📡 Signal emitted: Ranger summoned at 2026-06-16T22:35:38
-# 💾 Memory saved to: data/thought_seeds.jsonl
-```
+### Phase 1: 🏆 Hackathon (Jul 6-11)
+
+| День | Дата | Деливерабли | Статус |
+|------|------|-------------|--------|
+| D1 | Jul 6 | World map UI + DID stub | |
+| D2 | Jul 7 | SQLite adapter swap (hexagonal proven) | |
+| D3 | Jul 8 | Multi-agent world: 3+ agents, territory memory | |
+| D4 | Jul 9 | **Bitcoin Lightning micropayment** | ⚡ |
+| D5 | Jul 10 | On-chain thought seed + wallet signing | |
+| **🏆 SUBMIT** | **Jul 11 15:00 UTC** | **Containerised on AMD GPU** | |
+
+### Phase 2: 🧠 MVP (Jul 12 — Sep 30) = 6 sprints
+
+| Sprint | Фокус | Деливерабли | Gate |
+|--------|-------|-------------|------|
+| S1 | Post-hackathon polish | README, bugfixes, portfolio | v0.2.0 |
+| S2 | **Schell Lenses top 12** | Essential Experience, Fun, Curiosity, Flow... | Lens audit |
+| S3 | Codex Complete | Каждое существо: имя, lore, личность, инструменты | Codex docs |
+| S4 | XP + Rarity | Рост существ, редкие по условиям мысли | Тесты |
+| S5 | Reflex UI v2 | Mobile-first 375px, map, cards | Render test |
+| S6 | Fireworks AI in prod | Замена keyword → LLM классификатор | **v0.5.0 BETA** |
+
+### Phase 3: 🌿 Open Beta (Oct 1 — Dec 31)
+
+| Sprint | Фокус | KPI |
+|--------|-------|-----|
+| S7 | Community launch | Discord, >50 GitHub stars |
+| S8 | Bug bash | 95% тестов зелёные |
+| S9 | Territory wars | Agent conflicts, territory events |
+| S10 | Mobile UI | PWA, push notifications |
+| S11 | Lightning economy | Free tier = 5/day, rare = 1000 sats |
+| S12 | Winter event | Seasonal creatures |
+
+### Phase 4: 💛 Growth (Jan 1 — Mar 31 2027)
+
+| Sprint | Фокус | KPI |
+|--------|-------|-----|
+| S13 | Subscription model | €9.99/mo SUMMONER tier |
+| S14 | Content marketing | dev.to, Twitter threads |
+| S15 | Partnerships | AMD showcase, lablab alumni |
+| S16 | **100 Schell lenses applied** | Полный аудит дизайна |
+| S17 | Performance | Sub-1s summon |
+| S18 | Security audit | Lightning wallet, DID |
+| **⭐** | **Revenue check** | **€2k/mo MRR** |
+
+### Phase 5: 🚀 Scale (Apr 1 — Jun 30 2027)
+
+| Sprint | Фокус | KPI |
+|--------|-------|-----|
+| S19 | Real-world sensors | GPS territories, weather API |
+| S20 | User-generated agents | Trainable creatures |
+| S21 | AI narration | Story per summon |
+| S22 | Mobile app | Reflex → Capacitor |
+| S23 | Load test | 1000 concurrent summons |
+| S24 | Marketing push | Product Hunt, HN launch |
+
+### Phase 6: 🎂 WIN (Jul 1-29 2027)
+
+| Sprint | Фокус | Деливерабли |
+|--------|-------|-------------|
+| S25 | v1.0.0 RC | All tests green, docs, codex complete |
+| S26 | v1.0.0 RELEASE | Git tag, Release, demo, pitch |
+| **🎂 Jul 29** | **34 ГОДА — ТОЧКА Б** | **1000 MAU · €8k/mo MRR · v1.0.0 · Свабода** |
 
 ---
 
-## Vision
+## 🧠 Архитектура
 
-1. **The world is the game map.** Every physical location can become a named territory with agents, sensors, and emergent rules. No GPS data exists in a database — the world *is* the database.
+```
+thought seed → IntentRouter → Codex Creature → SummonEvent → EventBus → Reflex UI
+                    ↓
+          ClassifierPort (Protocol)
+                    ↓
+          Fireworks AI on AMD GPU
+                    ↓
+          Territory system + Lightning
+```
 
-2. **Agents are citizens, not tools.** Scout, Ranger, and future agents have roles, memory, and boundaries. They don't just process commands — they interpret them through their own objectives and constraints.
-
-3. **Open-source game design.** The GDD, the lore, the agent rules — all of it lives in version control. Fork Terramon and make your own world. The rules are open; the territories are local.
-
-4. **Reflex as the living frontend.** Not a static dashboard — a real-time, reactive interface where the world updates in the browser as agents make observations. Python full-stack, no JavaScript required.
+**Hexagonal + Event-Driven ("Summon & Signal")**
+- `domain/` — чистые dataclasses, без адаптеров
+- `ports/` — Protocol контракты
+- `adapters/` — реализации (JSON, SQLite, Fireworks AI, Lightning)
+- `events/` — EventBus с типизированными событиями
+- `application/` — IntentRouter, SummonOrchestrator
+- `agents/` — Codex creatures (Scout, Sage, Ranger...)
 
 ---
 
-## Run Locally
+## 🏗️ Как запустить
 
 ```bash
 git clone https://github.com/indrad3v4/Terramon.git
 cd Terramon
-
-python -m venv .venv
-source .venv/bin/activate
-pip install huggingface_hub python-dotenv
-
-echo "HF_TOKEN=your_token_here" > .env
-
-.venv/bin/python main.py
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+echo "HF_TOKEN=your_token" > .env
+python cli.py "I feel lost tonight"
+# → 📜 Sage summoned — "Offer perspective, guidance, and meaning."
 ```
 
-**What you get:** Scout speaks. One observation. One finding. Day 1 begins.
+---
+
+## 📄 Ключевые документы в репозитории
+
+| Файл | Что внутри |
+|------|-----------|
+| `ROADMAP_2027.md` | 12-month Agile roadmap, 26 спринтов |
+| `STARTUP_VISION.md` | Pitch deck (10 слайдов) для openvc.app |
+| `STRATEGY_5_WINS.md` | 5 стратегических вариантов победы |
+| `STRATEGY_6_THOUGHT_EXORCIST.md` | ✅ **Выбранная стратегия** — "Свабода ад думак" |
+| `harmonogram_v2.csv` | 34 дня до 29 июля 2026 |
+| `docs/day3_plan.md` | Архитектурное решение Day 3 |
 
 ---
 
-## Roadmap
+## 🤝 Как помочь
 
-| Milestone | What | Status |
-|-----------|------|--------|
-| 🕐 Day 3 | Scout remembers — thought-seed → memory loop | ✅ Done |
-| 🕐 Day 2 | Scout has a clock — time-aware observations | ✅ Done |
-| 🗺️ Territory Graph | Agents can reference named locations and spatial relationships | Next |
-| 🛰️ Ranger Agent | First field agent — real observation, real scan data | Upcoming |
-| 🔄 Agent-to-Agent Protocol | Scout receives field reports from Ranger autonomously | Upcoming |
-| 🧭 Reflex Dashboard | Live world view — agent activity, territory status, live findings | Upcoming |
-
----
-
-## Closing
+1. **⭐ Поставь звезду** — это мотивирует
+2. **🐛 Создай Issue** — баги, идеи, фичи
+3. **🍴 Форкни** — сделай свой мир со своими существами
 
 > *The world is not waiting to be saved. It is waiting to be observed.*
->
-> Deploy your first agent. Give it a name. Tell it where to look.
-> Then watch what it finds.
 
----
-
-**Built with 💜 by a studio that plays with code like other people play with worlds.**
-
-*Terramon is open source. Fork it. Deploy it. Break it. Build it better.*
+**Built with 💜 by indradev_ — AI Systems Architect**
