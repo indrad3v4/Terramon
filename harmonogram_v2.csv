@@ -1,35 +1,35 @@
-Day,Date,WIN,Key Files,Tests,Architecture Layer,Special,Hackathon Notes
-1,2026-06-14,Scout observes — first thought printed,main.py,0,Pre-arch flat script,✅ DONE,
-2,2026-06-15,Architecture locked — Hexagonal + Event-Driven 'Summon & Signal',"docs/day3_plan.md, README.md",0,Planning layer,✅ DONE,
-3,2026-06-16,Full summon loop proven — thought seed → router → agent → JSONL → event,"terramon/ (14 files), cli.py, tests/, .ai/review-rules.md, serge.yml",3/3,All layers + Serge gate,✅ DONE,
-4,2026-06-29,"Open-ended thought-to-agent routing — ANY thought summons the right codex creature by intent, not topic label","agents/ updated, intent_router.py extended, tests/test_intent_routing.py",5/5,agents/ + IntentRouter — intent classification,🔜 TODAY,
-5,2026-06-30,"Reflex frontend scaffold — summon form renders, accepts any thought","terramon_frontend/ (pages, state, components, services)",Frontend smoke test,Frontend — Reflex pages + state,,"AMD: sign up, claim $100 credits + $50 Fireworks AI"
-6,2026-07-01,Summon feed UI — agent cards appear after thought submission,"pages/summon.py, state/summon_state.py, components/agent_card.py",UI integration test,Frontend + adapters bridge,,AMD: explore Fireworks AI API
-7,2026-07-02,Outcome memory — agent outcomes stored alongside summons,"domain/outcome.py, ports/outcome_port.py, adapters/json_outcome.py",6/6,domain/ports/adapters — second memory loop,,AMD: define Unicorn Track pitch + containerisation plan
-8,2026-07-03,Fireworks AI classifier — LLM replaces keyword routing,"adapters/fireworks_classifier.py, ClassifierPort wired to Fireworks AI",Classifier tests,adapters/ — ClassifierPort real impl,🏆 HACKATHON PREP,AMD: first Fireworks AI API call on AMD GPU
-9,2026-07-04,Territory system — agents summoned to named map regions,"domain/territory.py, agents/ranger.py extended",Territory tests,domain/ + agents/ — territory awareness,🏆 HACKATHON PREP,AMD: containerize prototype (Dockerfile)
-10,2026-07-05,"Agent-to-agent events — one agent publishes, another subscribes","events/ranger_spotted.py, agents/strategist.py",Event fan-out tests,events/ — multi-subscriber EventBus,🏆 HACKATHON PREP,AMD: test container on AMD Developer Cloud GPU
-11,2026-07-06,🏆 HACKATHON DAY 1 — World map UI + DID stub,"pages/map.py, components/territory_card.py, domain/identity.py",Map + identity tests,Frontend + domain/ — territory + decentralised identity,🏆 LIVE July 6–11,"lablab.ai AMD ACT II opens — $10K prizes, Track 3 Unicorn"
-12,2026-07-07,🏆 HACKATHON DAY 2 — SQLite adapter swap (hexagonal proven),"adapters/sqlite_memory.py, migration_script.py",Adapter swap tests,adapters/ — second MemoryPort impl,🏆 HACKATHON DAY 2,AMD GPU hosted DB
-13,2026-07-08,"🏆 HACKATHON DAY 3 — Multi-agent world: 3+ agents, own territory memory","agents/archivist.py, domain/world_state.py",Multi-agent integration tests,agents/ + domain/ — world state,🏆 HACKATHON DAY 3,
-14,2026-07-09,🏆 HACKATHON DAY 4 — Bitcoin Lightning micropayment for rare agent summon,"adapters/lightning_adapter.py, ports/payment_port.py",Payment flow tests,adapters/ — PaymentPort + Lightning,🏆 HACKATHON DAY 4,Lightning as primary payment — rare codex creatures cost sats
-15,2026-07-10,🏆 HACKATHON DAY 5 — On-chain thought seed signed with wallet key,"adapters/wallet_signer.py, events/thought_signed.py",Signature tests,events/ + adapters/ — web3 signing,🏆 HACKATHON DAY 5,
-16,2026-07-11,"🏆 SUBMIT — Containerised Terramon on AMD GPU, Fireworks AI, Lightning, DID","Dockerfile, docker-compose.yml, README demo, pitch",Full integration in container,DevOps — AMD GPU deployment,🏆 SUBMIT by 15:00 UTC,lablab.ai submission deadline July 11 15:00 UTC — $10K prize pool
-17,2026-07-12,Post-hackathon polish — README + demo GIF + post-submit README,"README.md, assets/demo.gif",All prior tests green,Documentation + portfolio,🏆 POST-SUBMIT,Judges review finalists — winners highlighted on lablab.ai + AMD channels
-18,2026-07-13,Mobile-first UI pass — Reflex pages responsive at 375px,"pages/summon.py, components/thought_card.py (mobile)",Mobile render test,Frontend — mobile-first pass,,
-19,2026-07-14,"Codex design — every summoned agent has: name, summon condition, personality, tools, lore",docs/codex/*.md (one per agent),Codex consistency test,Docs + domain/ — agent identity layer,,
-20,2026-07-15,"Hermes unpacks Schell book — Priority lenses: Desire, Essential Experience, Fun, Curiosity, Flow",".agents/skills/ccgs_/lenses/desire.md, essential_experience.md, fun.md, curiosity.md, flow.md",Lens audit doc,CCGS Lens Toolkit — Schell book as subagent skill,📚 SCHELL DAY 1,"Lenses 1,3,4,18 — applied to summon loop"
-21,2026-07-16,"Schell lenses: Feedback, Story Machine, The World, Avatar",".agents/skills/ccgs_/lenses/feedback.md, story_machine.md, world.md, avatar.md",Lens audit,CCGS Lens Toolkit,📚 SCHELL DAY 2,"Lenses 57,65,74,75 — territory + summon feedback"
-22,2026-07-17,"Schell lenses: Economy, Fairness, Reward, Emergence",".agents/skills/ccgs_/lenses/economy.md, fairness.md, reward.md, emergence.md",Lens audit,CCGS Lens Toolkit,📚 SCHELL DAY 3,"Lenses 40,46,30,23 — Lightning economy + free tier fairness"
-23,2026-07-18,Remaining priority lenses batch — all 100 lenses committed,.agents/skills/ccgs_/lenses/ (all 100 .md files),Lens completeness check,CCGS Lens Toolkit — full Schell library,📚 SCHELL COMPLETE,All 100 lenses mapped to Terramon + CCGS roles
-24,2026-07-19,Rare agent mechanic — some codex creatures appear only under specific thought conditions,"domain/rarity.py, adapters/rarity_adapter.py",Rarity condition tests,domain/ + adapters/ — rarity system,,
-25,2026-07-20,Agent XP — agents grow based on summon frequency and outcome history,"domain/agent_xp.py, adapters/xp_adapter.py",XP accumulation tests,domain/ + adapters/ — agent growth,,Monetisation: €2k/mo path
-26,2026-07-21,"Lightning VIP tier — rare agent access costs sats, free tier still meaningful","adapters/lightning_vip.py, ports/payment_port.py extended",Payment tier tests,adapters/ — PaymentPort tier 2,,
-27,2026-07-22,Portfolio showcase — indra-ai.dev updated with Terramon live demo,"indra-ai.dev content, GitHub profile README",Visual QA,Portfolio — public-facing,,
-28,2026-07-23,"Terramon pitch polished — 1 paragraph, 1 GIF, 1 Lightning payment link","docs/pitch.md, assets/demo.gif",Pitch review,Marketing + docs,,
-29,2026-07-24,"Full integration stress test — 10 thoughts, 3 agents, 2 territories, Lightning payment",tests/test_integration.py,10/10,All layers — end-to-end,,
-30,2026-07-25,Bug fix + polish — all stress test issues resolved,Various,All green,QA + polish,,
-31,2026-07-26,Full codex complete — all summoned agents have codex entries,docs/codex/ complete,Codex consistency,Docs,,
-32,2026-07-27,"Birthday demo prep — walkthrough script, screenshots, demo dry run","docs/demo_script.md, assets/screenshots/",Demo dry run,Portfolio + docs,,
-33,2026-07-28,"v0.1.0 release — final commits, git tag, GitHub Release notes","All files, git tag v0.1.0, Release notes",All green,All layers — v0.1.0 release,,
-34,2026-07-29,"🎂 BIRTHDAY WIN — Terramon v0.1.0 live, hackathon submitted, Lightning live, Schell 100 lenses active, thought-to-agent proven",EVERYTHING,All green,"Complete: mobile-first, decentralised, AI-native, monetised",🎂 BIRTHDAY,
+Day,Date,WIN,IBM Concept,Game Mechanic,Key Deliverable,Tests,Notes
+1,2026-06-14,"First thought printed — Terramon born",—,Thought → Seed,main.py,0,"Foundation"
+2,2026-06-15,"Hexagonal + Event-Driven architecture",—,Summon & Signal,README.md,0,"Architecture lock"
+3,2026-06-16,"Full summon loop proven",—,Router → Agent → JSONL → Event,terramon/ (14 files),3/3,Serge gate
+4,2026-06-29,"Intent routing — ANY thought summons the right creature","Agent Fundamentals: intent classification","IntentRouter — classify by intent, not keyword",agents/ updated,5/5,"🔜 Real practice starts"
+5,2026-06-30,"Reflex frontend scaffold","Agent Interface: user → agent communication","Summon form renders accepts any thought",terramon_frontend/,Smoke test,AMD sign up
+6,2026-07-01,"Summon feed UI — agent cards appear","Agent Response: structured output to user","UI shows creature cards after summon",pages/summon.py,UI test,"AMD: explore API"
+7,2026-07-02,"Outcome memory — agents remember past summons","RAG: Retrieval-Augmented Generation","Memory loop: past outcomes influence future",domain/outcome.py,6/6,"AMD: define pitch"
+8,2026-07-03,"Fireworks AI classifier — LLM replaces keyword routing","LLM-as-Classifier: use LLM for intent detection","Fireworks AI classifies thought intent",adapters/fireworks_classifier.py,Classifier,"🏆 AMD: first API call"
+9,2026-07-04,"Territory system — agents mapped to regions","Agent Context: giving agents environmental awareness","Ranger patrols named regions",domain/territory.py,Territory,"🏆 AMD: Dockerize"
+10,2026-07-05,"Agent-to-agent events — one publishes, another subscribes","Multi-Agent Communication: event-driven handoffs","EventBus: strategist reads ranger sightings",events/ranger_spotted.py,Event fan-out,"🏆 AMD: test GPU"
+11,2026-07-06,"🏆 World map UI + DID stub","Agent Identity: decentralised agent identities","Map shows territories + creatures",pages/map.py,Map + identity,"🏆 LIVE Jul 6–11"
+12,2026-07-07,"🏆 SQLite adapter swap — hexagonal proven","Tool Use: agents interact with storage","MemoryPort has SQLite implementation",adapters/sqlite_memory.py,Adapter swap,"🏆 DAY 2"
+13,2026-07-08,"🏆 Multi-agent world: 3+ agents with territory memory","Multi-Agent Systems: coordination patterns","WorldState tracks all agents + territories",agents/archivist.py,Multi-agent,"🏆 DAY 3"
+14,2026-07-09,"🏆 Bitcoin Lightning micropayment","Agent Economics: cost-per-action models","Rare summon costs satoshis",adapters/lightning_adapter.py,Payment,"🏆 DAY 4"
+15,2026-07-10,"🏆 On-chain thought seed signed with wallet","Agent Security: verifiable identity","Thought seeds signed with wallet key",adapters/wallet_signer.py,Signature,"🏆 DAY 5"
+16,2026-07-11,"🏆 SUBMIT — containerised on AMD GPU","Agent Deployment: containerisation + cloud","Dockerfile + AMD GPU",Dockerfile,Integration,"🏆 SUBMIT 15:00"
+17,2026-07-12,"Post-hackathon polish — README + demo GIF","Agent Documentation: communicating capability","README + demo GIF",README.md,All prior,"🏆 POST-SUBMIT"
+18,2026-07-13,"Mobile-first UI pass","Agent UX: designing for any device","Responsive at 375px",pages/summon.py,Mobile test,
+19,2026-07-14,"Codex design — every agent has lore + personality","Agent Persona: defining agent identity","Each creature: name, condition, personality, tools, lore",docs/codex/*.md,Codex consistency,
+20,2026-07-15,"Schell lenses: Desire, Essential Experience, Fun, Curiosity, Flow","Agent Motivation: what drives engagement","Schell lens 1,3,4,18 → summon loop",lenses/desire.md,Lens audit,"📚 SCHELL DAY 1"
+21,2026-07-16,"Schell lenses: Feedback, Story Machine, The World, Avatar","Agent Feedback: response loops","Schell lens 57,65,74,75 → territory",lenses/feedback.md,Lens audit,"📚 SCHELL DAY 2"
+22,2026-07-17,"Schell lenses: Economy, Fairness, Reward, Emergence","Agent Economics: reward systems","Schell lens 40,46,30,23 → Lightning",lenses/economy.md,Lens audit,"📚 SCHELL DAY 3"
+23,2026-07-18,"All 100 Schell lenses committed","Agent Design Patterns: complete library","All lenses mapped to CCGS roles",.agents/skills/ccgs_/,Lens complete,"📚 SCHELL COMPLETE"
+24,2026-07-19,"Rare agent mechanic — conditional summon","Agent Rarity: scarcity drives engagement","Some creatures appear only under specific thoughts",domain/rarity.py,Rarity tests,
+25,2026-07-20,"Agent XP — creatures grow with use","Agent Learning: agents improve over time","XP based on summon frequency + outcome quality",domain/agent_xp.py,XP tests,Monetisation
+26,2026-07-21,"Lightning VIP tier — rare agent costs sats","Agent Monetisation: freemium → premium","Free tier meaningful, premium costs sats",adapters/lightning_vip.py,Tier tests,
+27,2026-07-22,"Portfolio showcase — indra-ai.dev live demo","Agent Portfolio: proving capability","Terramon demo on portfolio site",indra-ai.dev,Visual QA,
+28,2026-07-23,"Pitch polished — 1 paragraph, 1 GIF, 1 payment link","Agent Pitch: communicating value","Concise pitch + demo",docs/pitch.md,Pitch review,
+29,2026-07-24,"Integration stress test — full system under load","Agent Reliability: testing under pressure","10 thoughts, 3 agents, 2 territories, Lightning",tests/test_integration.py,10/10,
+30,2026-07-25,"Bug fix + polish — all issues resolved","Agent Quality: refinement","Stress test fixes applied",Various,All green,
+31,2026-07-26,"Full codex complete","Agent Identity: all creatures defined","Every agent has codex entry",docs/codex/ complete,Consistency,
+32,2026-07-27,"Birthday demo prep — walkthrough + screenshots","Agent Demo: showing the journey","Demo script + assets",docs/demo_script.md,Dry run,
+33,2026-07-28,"v0.1.0 release — git tag + release notes","Agent Release: shipping","Tagged release",git tag v0.1.0,All green,
+34,2026-07-29,"🎂 BIRTHDAY — v0.1.0 live, hackathon done, Lightning live, Schell done, pensum proven","Agent Complete: full system","All systems operational",EVERYTHING,All green,"🎂 POINT B"
