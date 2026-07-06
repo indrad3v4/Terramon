@@ -1,6 +1,6 @@
-# 🌍 TERRAMON — *Свабода ад думак праз гульню*
+# 🌍 Terramon — *Freedom From Thoughts Through Play*
 
-> **Pitch phrase:** *Самый дорогой терапевт — это твой мозг. Terramon — это индульгенция.*
+> **The most expensive therapist is your own brain. Terramon is the indulgence.**
 
 ![Python](https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white)
 ![Reflex](https://img.shields.io/badge/Reflex-6E56CF?style=for-the-badge&logo=reflex&logoColor=white)
@@ -10,181 +10,233 @@
 
 ---
 
-## 🎯 Стратегическая победа
+## 🎯 The Idea
 
-**Проблема:** Люди носят мысли в себе. Терапия дорога (€80-150/сессия). Journaling не помогает. Друзья не понимают.
+**The problem:** People carry their thoughts inside. Therapy costs €80-150/session. Journaling doesn't help. Friends don't get it.
 
-**Решение:** Terramon превращает твои мысли в существ. Ты печатаешь → IntentRouter классифицирует → Codex Creature призывается. Мысли живут ТАМ, а не в твоей голове.
+**Our take:** What if your thoughts became *creatures* that live OUTSIDE your head? You type → an AI classifies your intent → the right Codex Creature is summoned. The thought lives THERE, not in your skull.
 
-**Инсайт:** *Gaming is cheaper than therapy. Summoning is more effective than journaling.*
+**The insight:** *Gaming is cheaper than therapy. Summoning is more effective than journaling.*
 
 | DRIVER | BARRIER | THEREFORE | 🔑 INSIGHT |
 |--------|---------|-----------|------------|
-| "Я хочу свободы от своих мыслей" | "Терапия дорога. Дневник не помогает. Друзья не понимают." | "Я вызываю мысли как существ в игре — они живут ТАМ" | **Gaming > therapy. Summoning > journaling.** |
+| "I want freedom from my thoughts" | "Therapy is expensive. Journaling doesn't help. Friends don't get it." | "I summon my thoughts as creatures in a game — they live THERE" | **Gaming > therapy. Summoning > journaling.** |
 
 ---
 
-## 🏆 Track 3 Unicorn — AMD Hackathon ACT II
+## 🏆 Hackathon Track
 
-| Дата | Событие | Детали |
-|------|---------|--------|
-| **6-11 июля 2026** | AMD Developer Hackathon ACT II | lablab.ai, $10K prize pool |
-| **Трек** | Track 3 — Unicorn ("Build your startup") | Креативность, оригинальность, реальный потенциал |
-| **Формат** | Containerised submission | Dockerfile обязателен |
-| **Ресурсы** | $100 AMD Cloud credits + $50 Fireworks AI + AMD GPUs | AMD AI Developer Program |
+AMD Developer Hackathon ACT II — **Track 3: Unicorn** ("Build your startup")
 
----
-
-## 🗺 Roadmap — 12 месяцев до Точки Б (34 года)
-
-```
-29 июн 2026                             29 июл 2027
-│                                        │
-▼                                        ▼
-┌──────┬──────┬────────┬────────┬────────┬──────┐
-│PRE-H │🏆HACK│  MVP   │  BETA  │ GROWTH │ SCALE│
-│0:1спр│1:5дн │2:6спр  │3:6спр  │4:6спр  │5:6спр│
-└──────┴──────┴────────┴────────┴────────┴──────┘
-                                           │
-                                      🎂 WIN
-                                   v1.0.0 RELEASE
-                                   1000 MAU
-                                   €8k/mo MRR
-```
-
-### Phase 0: 🏃 Pre-Hackathon (Jun 29 — Jul 5)
-
-| День | Дата | Задача | Статус |
-|------|------|--------|--------|
-| 4 | Jun 29 | Intent routing — классификация по intent, не по keyword | 🔜 TODAY |
-| 5 | Jun 30 | Reflex frontend scaffold | |
-| 6 | Jul 1 | Summon feed UI — agent cards | |
-| 7 | Jul 2 | Outcome memory | |
-| 8 | Jul 3 | **Fireworks AI classifier на AMD GPU** | ⚡ |
-| 9 | Jul 4 | Territory system + Dockerfile | |
-| 10 | Jul 5 | Agent-to-agent events + AMD GPU deploy test | |
-
-### Phase 1: 🏆 Hackathon (Jul 6-11)
-
-| День | Дата | Деливерабли | Статус |
-|------|------|-------------|--------|
-| D1 | Jul 6 | World map UI + DID stub | |
-| D2 | Jul 7 | SQLite adapter swap (hexagonal proven) | |
-| D3 | Jul 8 | Multi-agent world: 3+ agents, territory memory | |
-| D4 | Jul 9 | **Bitcoin Lightning micropayment** | ⚡ |
-| D5 | Jul 10 | On-chain thought seed + wallet signing | |
-| **🏆 SUBMIT** | **Jul 11 15:00 UTC** | **Containerised on AMD GPU** | |
-
-### Phase 2: 🧠 MVP (Jul 12 — Sep 30) = 6 sprints
-
-| Sprint | Фокус | Деливерабли | Gate |
-|--------|-------|-------------|------|
-| S1 | Post-hackathon polish | README, bugfixes, portfolio | v0.2.0 |
-| S2 | **Schell Lenses top 12** | Essential Experience, Fun, Curiosity, Flow... | Lens audit |
-| S3 | Codex Complete | Каждое существо: имя, lore, личность, инструменты | Codex docs |
-| S4 | XP + Rarity | Рост существ, редкие по условиям мысли | Тесты |
-| S5 | Reflex UI v2 | Mobile-first 375px, map, cards | Render test |
-| S6 | Fireworks AI in prod | Замена keyword → LLM классификатор | **v0.5.0 BETA** |
-
-### Phase 3: 🌿 Open Beta (Oct 1 — Dec 31)
-
-| Sprint | Фокус | KPI |
-|--------|-------|-----|
-| S7 | Community launch | Discord, >50 GitHub stars |
-| S8 | Bug bash | 95% тестов зелёные |
-| S9 | Territory wars | Agent conflicts, territory events |
-| S10 | Mobile UI | PWA, push notifications |
-| S11 | Lightning economy | Free tier = 5/day, rare = 1000 sats |
-| S12 | Winter event | Seasonal creatures |
-
-### Phase 4: 💛 Growth (Jan 1 — Mar 31 2027)
-
-| Sprint | Фокус | KPI |
-|--------|-------|-----|
-| S13 | Subscription model | €9.99/mo SUMMONER tier |
-| S14 | Content marketing | dev.to, Twitter threads |
-| S15 | Partnerships | AMD showcase, lablab alumni |
-| S16 | **100 Schell lenses applied** | Полный аудит дизайна |
-| S17 | Performance | Sub-1s summon |
-| S18 | Security audit | Lightning wallet, DID |
-| **⭐** | **Revenue check** | **€2k/mo MRR** |
-
-### Phase 5: 🚀 Scale (Apr 1 — Jun 30 2027)
-
-| Sprint | Фокус | KPI |
-|--------|-------|-----|
-| S19 | Real-world sensors | GPS territories, weather API |
-| S20 | User-generated agents | Trainable creatures |
-| S21 | AI narration | Story per summon |
-| S22 | Mobile app | Reflex → Capacitor |
-| S23 | Load test | 1000 concurrent summons |
-| S24 | Marketing push | Product Hunt, HN launch |
-
-### Phase 6: 🎂 WIN (Jul 1-29 2027)
-
-| Sprint | Фокус | Деливерабли |
-|--------|-------|-------------|
-| S25 | v1.0.0 RC | All tests green, docs, codex complete |
-| S26 | v1.0.0 RELEASE | Git tag, Release, demo, pitch |
-| **🎂 Jul 29** | **34 ГОДА — ТОЧКА Б** | **1000 MAU · €8k/mo MRR · v1.0.0 · Свабода** |
+| Date | Event | Details |
+|------|-------|---------|
+| **Jul 6–11, 2026** | AMD Developer Hackathon ACT II | lablab.ai, $20K+ prize pool |
+| **Track** | Unicorn — "Build your startup" | Creativity, originality, real potential |
+| **Format** | Containerised submission | Dockerfile required |
+| **Resources** | $100 AMD Cloud + $50 Fireworks AI | AMD AI Developer Program |
 
 ---
 
-## 🧠 Архитектура
+## 🧠 Current Architecture
 
 ```
-thought seed → IntentRouter → Codex Creature → SummonEvent → EventBus → Reflex UI
+thought seed → IntentRouter → Codex Creature → SummonEvent → EventBus → (future UI)
                     ↓
           ClassifierPort (Protocol)
                     ↓
-          Fireworks AI on AMD GPU
+          KeywordClassifier ──→ (next) Fireworks AI on AMD GPU
                     ↓
-          Territory system + Lightning
+          Territory system + Lightning (planned)
 ```
 
-**Hexagonal + Event-Driven ("Summon & Signal")**
-- `domain/` — чистые dataclasses, без адаптеров
-- `ports/` — Protocol контракты
-- `adapters/` — реализации (JSON, SQLite, Fireworks AI, Lightning)
-- `events/` — EventBus с типизированными событиями
-- `application/` — IntentRouter, SummonOrchestrator
-- `agents/` — Codex creatures (Scout, Sage, Ranger...)
+**Hexagonal ("Ports & Adapters") + Event-Driven**
+
+| Layer | What lives here |
+|-------|-----------------|
+| `domain/` | Pure data classes — no dependencies |
+| `ports/` | Protocol contracts (ClassifierPort, MemoryPort) |
+| `adapters/` | Implementations (KeywordClassifier, JsonMemory) |
+| `events/` | Typed event bus (AgentSummoned, etc.) |
+| `application/` | IntentRouter, SummonService — the core loop |
+| `agents/` | Codex creatures (Scout, Ranger, Archivist, Strategist) |
+
+### The Summon Loop
+
+```
+1. You type a thought seed → "I feel lost tonight"
+2. IntentRouter.classify() → matches an agent
+3. Codex Creature summoned (e.g. Sage)
+4. ThoughtSeed saved to memory (JSON)
+5. AgentSummoned event published on EventBus
+6. (Future) Reflex UI renders the summoned creature
+```
+
+### Current Agents
+
+| Agent | Trigger Keywords | Role |
+|-------|-----------------|------|
+| **Scout** *(default)* | — | First responder. Processes and reports observations. |
+| **Ranger** | `scan`, `image`, `photo`, `camera`, `see`, `look` | Visual analysis and territory scanning. |
+| **Archivist** | `log`, `history`, `record`, `memory`, `past`, `archive` | Record keeping and historical research. |
+| **Strategist** | `plan`, `attack`, `defend`, `strategy`, `move`, `territory` | Territory management and tactical planning. |
+
+> **Current classifier:** keyword-based. **Next:** Fireworks AI LLM classifier running on AMD GPU for intent-based routing.
 
 ---
 
-## 🏗️ Как запустить
+## 🚀 Quick Start
 
 ```bash
+# 1. Clone
 git clone https://github.com/indrad3v4/Terramon.git
 cd Terramon
+
+# 2. Virtual environment
 python -m venv .venv && source .venv/bin/activate
+
+# 3. Install
 pip install -r requirements.txt
-echo "HF_TOKEN=your_token" > .env
+
+# 4. Set your HF token (for Scout agent via HuggingFace Inference API)
+echo "HF_TOKEN=your_huggingface_token" > .env
+
+# 5. Summon!
+python cli.py "Scan the ridge for movement"
+# → 🔭 Ranger summoned — "Observation received. Scanning..."
+
 python cli.py "I feel lost tonight"
-# → 📜 Sage summoned — "Offer perspective, guidance, and meaning."
+# → 📜 Scout summoned — default agent handles the unknown
+```
+
+### What you'll see
+
+```
+🌱 Thought seed: Scan the ridge for movement
+🧙 Summoned agent: Ranger
+🕒 Timestamp: 2026-07-06T12:34:56
+💾 Memory saved to: data/thought_seeds.jsonl
+📡 Signal emitted: Ranger summoned at 2026-07-06T12:34:56
 ```
 
 ---
 
-## 📄 Ключевые документы в репозитории
+## 🧪 Project Status
 
-| Файл | Что внутри |
-|------|-----------|
-| `ROADMAP_2027.md` | 12-month Agile roadmap, 26 спринтов |
-| `STARTUP_VISION.md` | Pitch deck (10 слайдов) для openvc.app |
-| `STRATEGY_5_WINS.md` | 5 стратегических вариантов победы |
-| `STRATEGY_6_THOUGHT_EXORCIST.md` | ✅ **Выбранная стратегия** — "Свабода ад думак" |
-| `harmonogram_v2.csv` | 34 дня до 29 июля 2026 |
-| `docs/day3_plan.md` | Архитектурное решение Day 3 |
+```
+┌──────────┬────────────┬──────────┬───────────┬────────────┬─────────┐
+│  PRE-HACK│ 🏆 HACKATHON │   MVP    │   BETA    │   GROWTH   │  SCALE  │
+│  Jun 29  │  Jul 6-11   │ Jul-Sep  │ Oct-Dec   │ Jan-Mar 27 │ Apr-Jun │
+└──────────┴────────────┴──────────┴───────────┴────────────┴─────────┘
+                                    │
+                               🎂 Jul 29, 2027
+                            v1.0.0 · 1,000 MAU · €8k/mo MRR
+```
+
+**Current Phase:** 🏃 Pre-Hackathon → 🏆 Hackathon
+
+### Hackathon Roadmap (Jul 6–11)
+
+| Day | Focus | Deliverable |
+|:---:|-------|-------------|
+| **D1** | World map UI + DID stub | Reflex map page, identity scaffold |
+| **D2** | SQLite adapter swap | Hexagonal architecture proven with real DB |
+| **D3** | Multi-agent world | 3+ agents, territory memory |
+| **D4** | Bitcoin Lightning payments | Micropayments for rare summons |
+| **D5** | On-chain thought seeds + polish | Containerised on AMD GPU |
+| **🏆** | **SUBMIT — Jul 11 18:00 CEST** | **Docker + pitch + video** |
+
+### Post-Hackathon (Jul 12 → Sep 30)
+
+- S1: Polish, bugfixes, v0.2.0
+- S2: Schell Lenses audit — Essential Experience, Fun, Curiosity, Flow
+- S3: Complete Codex — every creature has name, lore, personality, tools
+- S4: XP + Rarity system — creatures grow, rare ones by thought conditions
+- S5: Reflex UI v2 — mobile-first, map view, creature cards
+- S6: Fireworks AI classifier in prod — keyword → LLM intent routing
 
 ---
 
-## 🤝 Как помочь
+## 🏗️ How It's Built
 
-1. **⭐ Поставь звезду** — это мотивирует
-2. **🐛 Создай Issue** — баги, идеи, фичи
-3. **🍴 Форкни** — сделай свой мир со своими существами
+| Stack | What For |
+|-------|----------|
+| **Python 3.13** | Core engine |
+| **Reflex** | Web frontend (coming in hackathon phase) |
+| **Fireworks AI** | LLM intent classifier on AMD GPU |
+| **AMD Developer Cloud** | ROCm-powered inference |
+| **HuggingFace Inference API** | Scout agent runtime (current) |
+| **Bitcoin Lightning** | Micropayments (planned Day 4) |
+| **SQLite** | Persistent memory (planned Day 2) |
+| **Docker** | Containerised submission |
 
-> *The world is not waiting to be saved. It is waiting to be observed.*
+---
+
+## 📁 Repo Structure
+
+```
+Terramon/
+├── cli.py                    # CLI entry point
+├── main.py                   # Scout agent demo (HuggingFace)
+├── terramon/
+│   ├── domain/               # Pure data — ThoughtSeed, etc.
+│   ├── ports/                # Protocols — ClassifierPort, MemoryPort
+│   ├── adapters/             # Implementations — KeywordClassifier, JsonMemory
+│   ├── application/          # Use cases — IntentRouter, SummonService
+│   └── events/               # EventBus + typed events
+├── tests/                    # Pytest suite
+├── tools/                    # Utilities (time_tool)
+├── ROADMAP_2027.md           # 12-month plan, 26 sprints
+├── STARTUP_VISION.md         # Pitch deck (10 slides)
+└── STRATEGY_6_THOUGHT_EXORCIST.md  # ✅ Chosen strategy
+```
+
+---
+
+## 📄 Key Documents
+
+| File | What's Inside |
+|------|---------------|
+| `ROADMAP_2027.md` | 12-month Agile roadmap, 26 sprints, Phase 0–6 |
+| `STARTUP_VISION.md` | Pitch deck — problem, solution, TAM, business model |
+| `STRATEGY_6_THOUGHT_EXORCIST.md` | ✅ **Chosen strategy** — "Freedom from thoughts" |
+| `LEARNING_PATH.md` | Developer learning journey through the codebase |
+| `harmonogram_v2.csv` | 34-day sprint plan to Jul 29 |
+
+---
+
+## 🤝 How to Contribute
+
+1. **⭐ Star the repo** — it fuels the fire
+2. **🐛 Open an Issue** — bugs, ideas, features
+3. **🍴 Fork it** — build your own world with your own creatures
+4. **💬 Join the conversation** — [Discord](https://discord.gg/lablabai)
+
+### PR Workflow
+```bash
+# Run tests first
+python -m pytest tests/
+
+# Open a PR and tag for review
+# Human review required before merge
+```
+
+---
+
+## 🎯 The Long Game
+
+| Milestone | Target | Date |
+|-----------|--------|------|
+| 🏆 Hackathon submission | Working prototype on AMD GPU | Jul 11 |
+| 🧠 MVP release | Full summon loop + Reflex UI | Sep 30 |
+| 🌿 Open Beta | Community launch, Discord | Dec 31 |
+| 💛 Revenue | €2k/mo MRR | Mar 31, 2027 |
+| 🚀 Scale | 1,000 MAU | Jun 30, 2027 |
+| 🎂 **v1.0.0 + €8k/mo** | **Point B — 34 years old** | **Jul 29, 2027** |
+
+---
+
+> *"The world is not waiting to be saved. It is waiting to be observed."*
 
 **Built with 💜 by indradev_ — AI Systems Architect**
+
+*Terramon — "Like a meteorite, we don't arrive quietly." 🌠*
