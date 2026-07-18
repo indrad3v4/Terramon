@@ -2,6 +2,8 @@
 
 from dataclasses import dataclass
 
+from terramon.domain.rarity import Rarity
+
 
 @dataclass
 class ThoughtSeed:
@@ -11,3 +13,25 @@ class ThoughtSeed:
     summoned_agent: str
     timestamp: str
     status: str = "summoned"
+    rarity: str = "common"
+    price_sats: int = 0
+    paid: bool = False
+
+    @classmethod
+    def make(
+        cls,
+        raw_input: str,
+        summoned_agent: str,
+        timestamp: str,
+        rarity: Rarity = Rarity.COMMON,
+        price_sats: int = 0,
+        paid: bool = False,
+    ) -> "ThoughtSeed":
+        return cls(
+            raw_input=raw_input,
+            summoned_agent=summoned_agent,
+            timestamp=timestamp,
+            rarity=rarity.value,
+            price_sats=price_sats,
+            paid=paid,
+        )
