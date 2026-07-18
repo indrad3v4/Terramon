@@ -13,3 +13,5 @@ __pycache__/
 data/
 
 reflex.lock/
+data/creatures/
+data/creature_*.png
