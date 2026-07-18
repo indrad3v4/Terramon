@@ -24,6 +24,9 @@ class JsonMemory(MemoryPort):
             "summoned_agent": seed.summoned_agent,
             "timestamp": seed.timestamp,
             "status": seed.status,
+            "rarity": seed.rarity,
+            "price_sats": seed.price_sats,
+            "paid": seed.paid,
         }
         with self.path.open("a", encoding="utf-8") as file:
             file.write(json.dumps(record, ensure_ascii=False) + "\n")
