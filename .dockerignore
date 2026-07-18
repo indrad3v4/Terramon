@@ -1,0 +1,13 @@
+.venv/
+.web/
+__pycache__/
+*.pyc
+.states/
+reflex.lock/
+.git/
+data/*.png
+.env
+*.db
+tests/
+docs/
+*.md
