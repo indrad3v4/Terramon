@@ -12,6 +12,7 @@ import argparse
 from pathlib import Path
 
 from terramon.adapters.json_memory import JsonMemory
+from terramon.adapters.embedding_classifier import EmbeddingClassifier
 from terramon.adapters.keyword_classifier import KeywordClassifier
 from terramon.application.game_loop import GameLoop
 from terramon.application.summon_service import SummonService
@@ -26,7 +27,7 @@ def _build_service(memory_path: str, quiet: bool = False) -> SummonService:
     if not quiet:
         bus.subscribe(AgentSummoned, lambda event: None)  # signal handled by loop UI
     return SummonService(
-        classifier=KeywordClassifier(),
+        classifier=EmbeddingClassifier(),
         memory=JsonMemory(Path(memory_path)),
         bus=bus,
         clock=get_current_time,
