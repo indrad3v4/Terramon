@@ -1,29 +1,48 @@
-"""Terramon TMA — Reflex app (pure-Python back + front).
+"""Terramon TMA — Reflex app (pure-Python back + front) with AGENTIC loop.
 
-Reuses the existing domain: EmbeddingClassifier -> archetype, classify_rarity,
-PlayerProgress. One screen: type a thought -> summon -> creature card.
+Build-via-learn: the roast said 'vending machine, not story machine' — summoned
+thought ≠ agent. This version closes that: every summon is a GameLoop turn
+(ACT -> OBSERVE -> REWARD -> REFLECT) that persists to JsonMemory, so the
+creature SURVIVES the session and lives in the player's 'terra'. The agent
+remembers past thoughts and reflects on them (no LLM needed — schema-driven).
 
 Two worlds (reflex-dev skill):
 - BACKEND (Python runtime): TerramonState event handlers call the domain.
 - FRONTEND (compiled to JS): the index() component renders State vars.
-
-Telegram Mini App: this same URL is registered as a bot Menu Button. The
-Telegram WebApp JS SDK (theme, MainButton, initData) is reached via
-rx.call_script when needed — not required for this MVP screen.
 """
 
 from __future__ import annotations
 
 import reflex as rx
+from pathlib import Path
 
 from terramon.adapters.embedding_classifier import EmbeddingClassifier
+from terramon.adapters.json_memory import JsonMemory
+from terramon.application.game_loop import GameLoop
+from terramon.application.summon_service import SummonService
 from terramon.domain.progress import PlayerProgress, XP_BY_RARITY
-from terramon.domain.rarity import Rarity, classify_rarity
+from terramon.domain.rarity import Rarity
+from terramon.domain.thought_seed import ThoughtSeed
+from terramon.events.bus import EventBus
+from tools.time_tool import get_current_time
+
 
 # One classifier instance (prototypes precomputed once).
 _CLASSIFIER = EmbeddingClassifier()
 
-# Rarity -> UI color + sigil (mirrors application/feedback.py, but for web).
+# Persistent memory — survives sessions (Railway volume mount at data/).
+_MEMORY_PATH = Path("data/tma_memory.jsonl")
+_MEMORY = JsonMemory(_MEMORY_PATH)
+
+# GameLoop owns progression + reflection; SummonService persists each turn.
+_SERVICE = SummonService(
+    classifier=_CLASSIFIER,
+    memory=_MEMORY,
+    bus=EventBus(),  # fire-and-forget; no subscriber needed in TMA
+    clock=get_current_time,
+)
+_LOOP = GameLoop(_SERVICE, PlayerProgress(goal_distinct=5))
+
 _RARITY_COLOR = {
     "common": "#9ca3af",
     "uncommon": "#22c55e",
@@ -36,7 +55,6 @@ _RARITY_SIGIL = {
     "rare": "✧",
     "legendary": "★",
 }
-# One-line auto-lore per archetype (Creative Big Idea: card carries the feeling).
 _ARCHETYPE_LORE = {
     "Ranger": "Sees what others miss.",
     "Archivist": "Keeper of what was.",
@@ -47,8 +65,35 @@ _ARCHETYPE_LORE = {
 }
 
 
+def _reflect_on_memory(seeds: list[ThoughtSeed], new_agent: str) -> str:
+    """Agent reflects on the player from memory (schema-driven, no LLM).
+
+    The creature is not a label — it knows the player's history.
+    """
+    if not seeds:
+        return "A new presence stirs. The terra is empty; you are its first visitor."
+    total = len(seeds)
+    agents = [s.summoned_agent for s in seeds]
+    from collections import Counter
+    common = Counter(agents).most_common(1)[0]
+    text = " ".join(s.raw_input.lower() for s in seeds)
+    themes = []
+    if any(k in text for k in ("rent", "money", "pay", "broke", "work", "job")):
+        themes.append("survival & money")
+    if any(k in text for k in ("afraid", "fear", "anxious", "scared", "interview")):
+        themes.append("fear & the unknown")
+    if any(k in text for k in ("love", "friend", "family", "alone", "miss")):
+        themes.append("connection")
+    theme_txt = ", ".join(themes) if themes else "the quiet ordinary"
+    return (
+        f"{new_agent} remembers {total} thought(s). "
+        f"You summon {common[0]} most often ({common[1]}×). "
+        f"Your terra echoes: {theme_txt}."
+    )
+
+
 class TerramonState(rx.State):
-    """Backend state — runs in Python, drives the summon loop."""
+    """Backend state — runs in Python, drives the agentic summon loop."""
 
     thought: str = ""
     agent: str = ""
@@ -59,13 +104,14 @@ class TerramonState(rx.State):
     xp: int = 0
     level: int = 1
     distinct: int = 0
-    goal: int = 3
+    goal: int = 5
     price_sats: int = 0
     has_summoned: bool = False
     goal_reached: bool = False
+    reflection: str = ""
 
-    # Persisted progress lives on the state (per-session for the MVP).
-    _collection: set[str] = set()
+    # The player's terra: every creature that ever lived (persisted).
+    terra: list[dict] = []
 
     @rx.event
     def set_thought(self, value: str):
@@ -74,30 +120,103 @@ class TerramonState(rx.State):
 
     @rx.event
     def summon(self):
-        """One turn: thought -> archetype + rarity -> card + progress."""
+        """One agentic turn: thought -> ACT/OBSERVE/REWARD/REFLECT -> persist."""
         text = self.thought.strip()
         if not text:
             return
-        agent = _CLASSIFIER.classify(text)
-        rres = classify_rarity(text)
-        rarity = rres.rarity.value
 
-        # progress (session-scoped set)
-        self._collection = set(self._collection)
-        self._collection.add(agent)
-        gained = XP_BY_RARITY[Rarity(rarity)]
-        self.xp += gained
-        self.level = self.xp // 100 + 1
-        self.distinct = len(self._collection)
-        self.goal_reached = self.distinct >= self.goal
+        # GameLoop.take_turn: SummonService.summon -> JsonMemory.save_seed,
+        # PlayerProgress.award, juicy reveal.
+        result = _LOOP.take_turn(text, color=False)
 
-        self.agent = agent
+        rarity = result.rarity
+        self.agent = result.agent
         self.rarity = rarity
         self.sigil = _RARITY_SIGIL[rarity]
         self.color = _RARITY_COLOR[rarity]
-        self.lore = _ARCHETYPE_LORE.get(agent, "A thought made flesh.")
-        self.price_sats = rres.price_sats
+        self.lore = _ARCHETYPE_LORE.get(result.agent, "A thought made flesh.")
+        self.price_sats = _price_for(rarity)
+        self.xp = _LOOP.progress.xp
+        self.level = _LOOP.progress.level
+        self.distinct = _LOOP.progress.distinct_count
+        self.goal = _LOOP.progress.goal_distinct
+        self.goal_reached = result.goal_reached
         self.has_summoned = True
+
+        # Reflection: the creature knows the player's history (memory).
+        seeds = _MEMORY.load_all_seeds()
+        self.reflection = _reflect_on_memory(seeds, result.agent)
+
+        # Reload terra (all persisted creatures).
+        self.terra = [_seed_to_card(s) for s in seeds]
+
+    @rx.event
+    def load_terra(self):
+        """Load the player's persisted terra on app open (survives redeploys)."""
+        seeds = _MEMORY.load_all_seeds()
+        self.terra = [_seed_to_card(s) for s in seeds]
+        if seeds:
+            # Recompute progress from persisted memory (don't lose XP on reload).
+            _LOOP.progress = PlayerProgress(goal_distinct=5)
+            for s in seeds:
+                _LOOP.progress.award(s.summoned_agent, Rarity(s.rarity))
+            self.xp = _LOOP.progress.xp
+            self.level = _LOOP.progress.level
+            self.distinct = _LOOP.progress.distinct_count
+            self.goal = _LOOP.progress.goal_distinct
+
+
+def _price_for(rarity: str) -> int:
+    """Map rarity -> sats price (mirrors domain/rarity.py)."""
+    return {
+        "common": 0,
+        "uncommon": 0,
+        "rare": 15,
+        "legendary": 25,
+    }.get(rarity, 0)
+
+
+def _seed_to_card(seed: ThoughtSeed) -> dict:
+    """Flatten a persisted seed into a renderable terra card (dict for rx.foreach)."""
+    rarity = seed.rarity if isinstance(seed.rarity, str) else seed.rarity.value
+    return {
+        "agent": seed.summoned_agent,
+        "rarity": rarity,
+        "sigil": _RARITY_SIGIL.get(rarity, "·"),
+        "color": _RARITY_COLOR.get(rarity, "#9ca3af"),
+        "thought": seed.raw_input,
+        "lore": _ARCHETYPE_LORE.get(seed.summoned_agent, "A thought made flesh."),
+        "timestamp": seed.timestamp,
+    }
+
+
+def terra_card(item: dict) -> rx.Component:
+    """One creature in the terra grid. `item` is a Var[dict] during compile.
+
+    Reflex 0.9.x Var dict items: pass `item["key"]` directly into rx.text —
+    do NOT string-concatenate (ObjectItemOperation has no __add__).
+    """
+    return rx.box(
+        rx.vstack(
+            rx.hstack(
+                rx.text(item["sigil"], font_size="0.7em", letter_spacing="0.15em"),
+                rx.text(item["rarity"], font_size="0.7em", letter_spacing="0.15em"),
+                spacing="2",
+                color=item["color"],
+            ),
+            rx.heading(item["agent"], size="5", color=item["color"]),
+            rx.text(item["thought"], font_style="italic",
+                    color="#9ca3af", font_size="0.8em", max_width="220px"),
+            spacing="1",
+            align="center",
+        ),
+        border="1px solid #27272a",
+        border_left=item["color"],
+        border_radius="12px",
+        padding="0.8em",
+        background="#141418",
+        width="100%",
+    )
 
 
 def creature_card() -> rx.Component:
@@ -111,12 +230,16 @@ def creature_card() -> rx.Component:
                 color=TerramonState.color,
             ),
             rx.heading(TerramonState.agent, size="7", color=TerramonState.color),
-            rx.text('"' + TerramonState.thought + '"', font_style="italic", color="#e5e7eb", text_align="center"),
+            rx.text('"' + TerramonState.thought + '"', font_style="italic",
+                    color="#e5e7eb", text_align="center"),
             rx.text(TerramonState.lore, font_size="0.9em", color="#9ca3af"),
+            rx.text(TerramonState.reflection, font_size="0.8em", color="#a78bfa",
+                    text_align="center", max_width="360px"),
             rx.divider(),
             rx.hstack(
                 rx.text("Lv." + TerramonState.level.to_string(), color="#e5e7eb"),
-                rx.text(TerramonState.distinct.to_string() + "/" + TerramonState.goal.to_string() + " collected", color="#e5e7eb"),
+                rx.text(TerramonState.distinct.to_string() + "/" + TerramonState.goal.to_string()
+                        + " collected", color="#e5e7eb"),
                 spacing="4",
             ),
             rx.cond(
@@ -137,7 +260,7 @@ def creature_card() -> rx.Component:
             spacing="3",
             align="center",
         ),
-        border="1px solid " + "#27272a",
+        border="1px solid #27272a",
         border_left="4px solid " + TerramonState.color,
         border_radius="16px",
         padding="1.5em",
@@ -148,7 +271,7 @@ def creature_card() -> rx.Component:
 
 
 def index() -> rx.Component:
-    """Single-screen TMA: input -> summon -> card."""
+    """Single-screen TMA: input -> summon -> card + terra grid."""
     return rx.center(
         rx.vstack(
             rx.heading("🌍 TERRAMON", size="8", color="#f5f5f5"),
@@ -169,6 +292,21 @@ def index() -> rx.Component:
                 max_width="380px",
             ),
             rx.cond(TerramonState.has_summoned, creature_card(), rx.fragment()),
+            rx.divider(),
+            rx.heading("🜨 YOUR TERRA", size="5", color="#a78bfa"),
+            rx.text(TerramonState.distinct.to_string() + " creatures live here",
+                    color="#9ca3af", font_size="0.85em"),
+            rx.cond(
+                TerramonState.terra.length() > 0,
+                rx.grid(
+                    rx.foreach(TerramonState.terra, terra_card),
+                    columns="2",
+                    spacing="3",
+                    width="100%",
+                    max_width="380px",
+                ),
+                rx.text("Empty terra. Summon your first thought.", color="#6b7280"),
+            ),
             spacing="4",
             align="center",
             padding="2em 1em",
@@ -182,4 +320,4 @@ def index() -> rx.Component:
 app = rx.App(
     theme=rx.theme(appearance="dark", accent_color="amber"),
 )
-app.add_page(index, title="Terramon — summon your thoughts")
+app.add_page(index, title="Terramon — summon your thoughts", on_load=TerramonState.load_terra)
