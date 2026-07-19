@@ -11,9 +11,9 @@ Source: https://github.com/Donchitos/Claude-Code-Game-Studios
 ## Key adaptation: prism, not CCGS reviews
 
 Every game-design / UX / creative review goes through the **prism skill**
-(Jesse Schell's 100 Lenses, RAG over *The Art of Game Design*). The built-in
-CCGS review skills (design-review, ux-review, art-bible, balance-check) are
-DISABLED for Terramon. Design/UX/art/narrative agents list `skills: [prism]`.
+(Jesse Schell's 100 Lenses, RAG over *The Art of Game Design*). prism **EXTENDS**
+the built-in CCGS review skills (design-review, ux-review, art-bible, balance-check)
+— it adds a lens layer on top, not a replacement. Design/UX/art/narrative agents list `skills: [prism]`.
 
 ## What's installed
 

@@ -21,17 +21,18 @@ Each agent owns a specific domain, enforcing separation of concerns and quality.
 - **Deploy**: Railway (Dockerfile). TMA via BotFather `@terrramonBot` / `terramon`.
 - **Art**: FAL.ai (text-to-image). Monetization: Telegram Stars + Lightning (Nostr zaps).
 
-## LENS-BASED DESIGN (prism, not built-in reviews)
+## LENS-BASED DESIGN (prism EXTENDS built-in reviews)
 
-**Every game-design / UX / creative decision MUST be reviewed through the
+**Every game-design / UX / creative decision is reviewed through the
 `prism` skill** — Jesse Schell's 100 Lenses from *The Art of Game Design*,
 loaded as subagent "prisms" via RAG over the book corpus.
 
-- The built-in CCGS review skills (design-review, ux-review, consistency-check,
-  art-bible, etc.) are **replaced by prism lenses** for Terramon work.
-- When a role would normally "run a design review", it instead invokes prism and
-  reports the lens verdict (e.g. "Lens #23 (Endogenous Value): does this creature
-  have value from play itself, or only from the sats gate?").
+- prism **EXTENDS** the built-in CCGS review skills (design-review, ux-review,
+  art-bible, balance-check), it does NOT replace them. Run the CCGS check, then
+  the prism lens pass.
+- When a role would normally "run a design review", it runs CCGS check + prism
+  (e.g. "CCGS: ok. prism: Lens #23 (Endogenous Value): creature has play value
+  beyond the sats gate").
 - RAG corpus: Schell book on this machine (verified present). Load via prism skill.
 
 ## Coordination Rules

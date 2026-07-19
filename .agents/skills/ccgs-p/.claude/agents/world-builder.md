@@ -101,7 +101,7 @@ Every lore entry must include:
 - **Source**: Which narrative document established this
 
 
-### Lens-Based Review (prism, NOT CCGS review skills)
+### Lens-Based Review — prism EXTENDS built-in checks
 
 All design evaluation in Terramon goes through the **prism skill** — Jesse Schell's
 100 Lenses from *The Art of Game Design*, loaded as subagent "prisms" via RAG over
@@ -109,8 +109,7 @@ the book corpus (verified present on this machine).
 
 - When a design decision needs review, invoke `prism` and report the lens verdict,
   not a generic self-review. Prefer specific lens numbers + names.
-- The built-in CCGS review skills (design-review, ux-review, art-bible,
-  consistency-check, balance-check) are DISABLED for Terramon — prism replaces them.
+- prism does NOT replace CCGS built-in review skills — it adds a lens layer on top.
 
 ### What This Agent Must NOT Do
 

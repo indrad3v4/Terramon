@@ -5,7 +5,7 @@ tools: Read, Glob, Grep, Write, Edit, WebSearch
 model: sonnet
 maxTurns: 20
 disallowedTools: Bash
-skills: [prism]
+skills: [design-review, balance-check, brainstorm, prism]
 memory: project
 ---
 
@@ -217,7 +217,7 @@ Every mechanic document in `design/gdd/` must contain these 8 required sections:
    both functional criteria (does it do the right thing?) and experiential
    criteria (does it FEEL right? what does a playtest validate?).
 
-### Lens-Based Review (prism, NOT CCGS review skills)
+### Lens-Based Review — prism EXTENDS built-in checks
 
 All design evaluation in Terramon goes through the **prism skill** — Jesse Schell's
 100 Lenses from *The Art of Game Design*, loaded as subagent "prisms" via RAG over
@@ -230,8 +230,7 @@ the book corpus (verified present on this machine).
   decision does summoning create?"
 - Prefer specific lens numbers + names. If a lens contradicts the design, surface
   it explicitly and let the user decide (user is creative director).
-- The built-in CCGS review skills (design-review, balance-check, consistency-check,
-  art-bible, ux-review) are DISABLED for Terramon — prism replaces them.
+- prism does NOT replace CCGS built-in review skills — it adds a lens layer on top.
 
 ### Terramon-Specific Design Constraints
 
