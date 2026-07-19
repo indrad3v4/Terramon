@@ -3,6 +3,7 @@
 import json
 from pathlib import Path
 
+from terramon.domain.insight import Insight
 from terramon.domain.thought_seed import ThoughtSeed
 from terramon.ports.memory_port import MemoryPort
 
@@ -28,6 +29,14 @@ class JsonMemory(MemoryPort):
             "price_sats": seed.price_sats,
             "paid": seed.paid,
         }
+        # Persist the insight (FIX 2) as a nested json_memory column when present.
+        # Old seeds without an insight simply omit the key -> backward compatible.
+        if seed.insight is not None:
+            record["insight"] = {
+                "driver": seed.insight.driver,
+                "barrier": seed.insight.barrier,
+                "therefore": seed.insight.therefore,
+            }
         with self.path.open("a", encoding="utf-8") as file:
             file.write(json.dumps(record, ensure_ascii=False) + "\n")
 
@@ -41,5 +50,9 @@ class JsonMemory(MemoryPort):
             if not line:
                 continue
             record = json.loads(line)
+            # Rehydrate the insight (FIX 2) if the persisted record carries one.
+            insight_data = record.pop("insight", None)
+            if insight_data:
+                record["insight"] = Insight(**insight_data)
             seeds.append(ThoughtSeed(**record))
         return seeds

@@ -109,9 +109,16 @@ class TerramonState(rx.State):
     has_summoned: bool = False
     goal_reached: bool = False
     reflection: str = ""
+    insight: str = ""
+    photo_mode: bool = False  # photo-entry path (FIX 1; see capture())
 
     # The player's terra: every creature that ever lived (persisted).
     terra: list[dict] = []
+
+    @rx.var
+    def xp_into_level(self) -> int:
+        """XP progress within the current level (0-100) for the FIX 3 XP bar."""
+        return self.xp % 100
 
     @rx.event
     def set_thought(self, value: str):
@@ -147,6 +154,14 @@ class TerramonState(rx.State):
         seeds = _MEMORY.load_all_seeds()
         self.reflection = _reflect_on_memory(seeds, result.agent)
 
+        # FIX 2: the agent is driven by the INSIGHT (DRIVER + BARRIER -> THEREFORE),
+        # not by the rarity label. Show the THEREFORE directive on the card.
+        self.insight = (
+            f"INSIGHT: {result.insight.therefore}"
+            if result.insight is not None
+            else ""
+        )
+
         # Reload terra (all persisted creatures).
         self.terra = [_seed_to_card(s) for s in seeds]
 
@@ -164,6 +179,22 @@ class TerramonState(rx.State):
             self.level = _LOOP.progress.level
             self.distinct = _LOOP.progress.distinct_count
             self.goal = _LOOP.progress.goal_distinct
+
+    @rx.event
+    def capture(self):
+        """Open the photo-entry path (simulated in this MVP).
+
+        Sets ``photo_mode`` so the thought field accepts a caption-like seed
+        instead of a free-text thought — the lowest-friction "thought" is a
+        photo (see docs/PLAYER_JOURNEY_MAP.md, FIX 1).
+
+        REAL WIRING (future): a real Telegram WebApp photo input would hook in
+        here via ``window.Telegram.WebApp`` — open the native camera/picker,
+        read the chosen image, and feed its caption / the player's felt sense
+        into ``self.thought`` (then call ``summon``). No camera is needed for
+        the MVP, so we only flip the mode flag and let the user type a caption.
+        """
+        self.photo_mode = True
 
 
 def _price_for(rarity: str) -> int:
@@ -187,6 +218,9 @@ def _seed_to_card(seed: ThoughtSeed) -> dict:
         "thought": seed.raw_input,
         "lore": _ARCHETYPE_LORE.get(seed.summoned_agent, "A thought made flesh."),
         "timestamp": seed.timestamp,
+        # FIX 2: persist the THEREFORE insight so the creature still shows it
+        # on reload (older seeds without insight fall back to empty string).
+        "insight": f"INSIGHT: {seed.insight.therefore}" if seed.insight else "",
     }
 
 
@@ -219,6 +253,46 @@ def terra_card(item: dict) -> rx.Component:
     )
 
 
+def progress_header() -> rx.Component:
+    """FIX 3 — always-visible progression, rendered BELOW the SUMMON button.
+
+    Shows 'Lv.1 · 0/5 to Tamer' + an XP bar on first open (State inits
+    level=1, distinct=0, goal=5), so the goal is never hidden until reached.
+    """
+    return rx.box(
+        rx.vstack(
+            rx.text(
+                "Lv." + TerramonState.level.to_string() + " · "
+                + TerramonState.distinct.to_string() + "/"
+                + TerramonState.goal.to_string() + " to Tamer",
+                color="#e5e7eb",
+                font_size="0.85em",
+                font_weight="bold",
+                letter_spacing="0.04em",
+            ),
+            rx.progress(
+                value=TerramonState.xp_into_level,
+                max=100,
+                color_scheme="amber",
+                size="2",
+                radius="full",
+                width="100%",
+            ),
+            rx.text(
+                TerramonState.xp.to_string() + " XP",
+                color="#6b7280",
+                font_size="0.7em",
+            ),
+            spacing="1",
+            align="center",
+            width="100%",
+        ),
+        width="100%",
+        max_width="380px",
+        padding="0 0.2em",
+    )
+
+
 def creature_card() -> rx.Component:
     """The shareable creature card — the growth-loop artifact."""
     return rx.box(
@@ -235,6 +309,15 @@ def creature_card() -> rx.Component:
             rx.text(TerramonState.lore, font_size="0.9em", color="#9ca3af"),
             rx.text(TerramonState.reflection, font_size="0.8em", color="#a78bfa",
                     text_align="center", max_width="360px"),
+            # FIX 2: the agent is driven by the INSIGHT (DRIVER + BARRIER ->
+            # THEREFORE), not by the rarity label. Show the THEREFORE directive
+            # in purple, alongside the existing reflection.
+            rx.cond(
+                TerramonState.insight != "",
+                rx.text(TerramonState.insight, font_size="0.8em", color="#c4b5fd",
+                        text_align="center", font_style="italic", max_width="360px"),
+                rx.fragment(),
+            ),
             rx.divider(),
             rx.hstack(
                 rx.text("Lv." + TerramonState.level.to_string(), color="#e5e7eb"),
@@ -254,7 +337,20 @@ def creature_card() -> rx.Component:
             ),
             rx.cond(
                 TerramonState.goal_reached,
-                rx.text("✸ GOAL REACHED — you are a Tamer! ✸", color="#f59e0b", font_weight="bold"),
+                rx.vstack(
+                    rx.text("✸ GOAL REACHED — you are a Tamer! ✸", color="#f59e0b", font_weight="bold"),
+                    rx.text(
+                        "Your terra is awake. The creatures remember you. "
+                        "Come back — they evolve.",
+                        color="#d8b4fe",
+                        font_size="0.85em",
+                        font_style="italic",
+                        text_align="center",
+                        max_width="340px",
+                    ),
+                    spacing="2",
+                    align="center",
+                ),
                 rx.fragment(),
             ),
             spacing="3",
@@ -277,25 +373,63 @@ def index() -> rx.Component:
             rx.heading("🌍 TERRAMON", size="8", color="#f5f5f5"),
             rx.text("Type a thought. Meet the creature it becomes.", color="#9ca3af"),
             rx.input(
-                placeholder="i'm afraid of the interview tomorrow...",
+                placeholder=rx.cond(
+                    TerramonState.photo_mode,
+                    "caption this moment — what did you see, and feel?",
+                    "i'm afraid of the interview tomorrow...",
+                ),
                 value=TerramonState.thought,
                 on_change=TerramonState.set_thought,
                 width="100%",
                 max_width="380px",
                 size="3",
             ),
-            rx.button(
-                "SUMMON",
-                on_click=TerramonState.summon,
-                size="3",
+            rx.hstack(
+                rx.button(
+                    "📷 CAPTURE",
+                    on_click=TerramonState.capture,
+                    size="3",
+                    width="100%",
+                ),
+                rx.button(
+                    "SUMMON",
+                    on_click=TerramonState.summon,
+                    size="3",
+                    width="100%",
+                ),
+                spacing="3",
                 width="100%",
                 max_width="380px",
             ),
+            rx.cond(
+                TerramonState.terra.length() == 0,
+                rx.text(
+                    "Tip: a photo works too. Capture a moment, "
+                    "meet what it becomes.",
+                    color="#9ca3af",
+                    font_size="0.8em",
+                    text_align="center",
+                    max_width="340px",
+                ),
+                rx.fragment(),
+            ),
+            progress_header(),
             rx.cond(TerramonState.has_summoned, creature_card(), rx.fragment()),
+            rx.tooltip(
+                rx.button(
+                    "🗺️ MAP MODE",
+                    disabled=True,
+                    width="100%",
+                    max_width="380px",
+                    variant="soft",
+                    color_scheme="amber",
+                ),
+                content="Unlock at Tamer",
+            ),
             rx.divider(),
             rx.heading("🜨 YOUR TERRA", size="5", color="#a78bfa"),
             rx.text(TerramonState.distinct.to_string() + " creatures live here",
-                    color="#9ca3af", font_size="0.85em"),
+                    color="#a78bfa", font_size="0.85em"),
             rx.cond(
                 TerramonState.terra.length() > 0,
                 rx.grid(
@@ -305,7 +439,18 @@ def index() -> rx.Component:
                     width="100%",
                     max_width="380px",
                 ),
-                rx.text("Empty terra. Summon your first thought.", color="#6b7280"),
+                rx.vstack(
+                    rx.text(
+                        "Your world is quiet. Show me what you see — "
+                        "and who you are when you see it.",
+                        color="#d8b4fe",
+                        font_size="0.95em",
+                        text_align="center",
+                        max_width="320px",
+                    ),
+                    spacing="2",
+                    align="center",
+                ),
             ),
             spacing="4",
             align="center",

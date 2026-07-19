@@ -15,3 +15,5 @@ data/
 reflex.lock/
 data/creatures/
 data/creature_*.png
+frontend.zip
+.railway/

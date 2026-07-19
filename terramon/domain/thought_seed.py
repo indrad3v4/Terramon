@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 
+from terramon.domain.insight import Insight
 from terramon.domain.rarity import Rarity
 
 
@@ -16,6 +17,10 @@ class ThoughtSeed:
     rarity: str = "common"
     price_sats: int = 0
     paid: bool = False
+    # The INSIGHT (DRIVER + BARRIER -> THEREFORE) that actually drives the
+    # agent. Optional for backward compatibility with seeds persisted before
+    # FIX 2 — old records deserialise with insight=None.
+    insight: Insight | None = None
 
     @classmethod
     def make(
@@ -26,6 +31,7 @@ class ThoughtSeed:
         rarity: Rarity = Rarity.COMMON,
         price_sats: int = 0,
         paid: bool = False,
+        insight: Insight | None = None,
     ) -> "ThoughtSeed":
         return cls(
             raw_input=raw_input,
@@ -34,4 +40,5 @@ class ThoughtSeed:
             rarity=rarity.value,
             price_sats=price_sats,
             paid=paid,
+            insight=insight,
         )

@@ -14,6 +14,7 @@ from collections.abc import Callable
 
 from terramon.application.intent_router import IntentRouter
 from terramon.application.payment_gate import PaymentGate
+from terramon.application.insight_engine import extract_insight
 from terramon.domain.thought_seed import ThoughtSeed
 from terramon.domain.rarity import classify_rarity
 from terramon.events.agent_summoned import AgentSummoned
@@ -61,6 +62,8 @@ class SummonService:
             rarity=rarity.rarity,
             price_sats=rarity.price_sats,
             paid=paid,
+            # FIX 2: the agent is driven by the INSIGHT, not by the rarity label.
+            insight=extract_insight(raw_input),
         )
         self.memory.save_seed(seed)
         self.bus.publish(AgentSummoned(raw_input, agent_name, seed.timestamp))
@@ -84,6 +87,8 @@ class SummonService:
             rarity=rarity.rarity,
             price_sats=rarity.price_sats,
             paid=True,
+            # FIX 2: rare summons also carry an insight.
+            insight=extract_insight(raw_input),
         )
         self.memory.save_seed(seed)
         self.bus.publish(AgentSummoned(raw_input, agent_name, seed.timestamp))
