@@ -2,13 +2,19 @@
 
 from dataclasses import dataclass
 
-from terramon.domain.insight import Insight
+from terramon.domain.insight import Insight, GeoContext
 from terramon.domain.rarity import Rarity
 
 
 @dataclass
 class ThoughtSeed:
-    """Raw player input routed to an agent and stored as memory."""
+    """Raw player input routed to an agent and stored as memory.
+
+    v2: every creature carries its geo-coordinates (where on Earth it was
+    born) and its unique embedding nuance — 7+ billion people with thousands
+    of thoughts each cannot be squeezed into 5 reductive buckets. Every
+    summon is a unique point in the embedding space, anchored to a real place.
+    """
 
     raw_input: str
     summoned_agent: str
@@ -21,6 +27,12 @@ class ThoughtSeed:
     # agent. Optional for backward compatibility with seeds persisted before
     # FIX 2 — old records deserialise with insight=None.
     insight: Insight | None = None
+    # v2: geographic anchor — where on Earth this thought was born.
+    # When the player captures a photo (Kraków, etc.), the creature lives
+    # at that real place. Terra = actual planet Earth.
+    lat: float = 0.0
+    lon: float = 0.0
+    place_name: str = ""  # e.g. "Kraków, Poland"
 
     @classmethod
     def make(
@@ -32,6 +44,9 @@ class ThoughtSeed:
         price_sats: int = 0,
         paid: bool = False,
         insight: Insight | None = None,
+        lat: float = 0.0,
+        lon: float = 0.0,
+        place_name: str = "",
     ) -> "ThoughtSeed":
         return cls(
             raw_input=raw_input,
@@ -41,4 +56,7 @@ class ThoughtSeed:
             price_sats=price_sats,
             paid=paid,
             insight=insight,
+            lat=lat,
+            lon=lon,
+            place_name=place_name,
         )

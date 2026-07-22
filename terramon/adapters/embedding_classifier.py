@@ -87,6 +87,9 @@ class EmbeddingClassifier(ClassifierPort):
     DEFAULT_AGENT = "Scout"
 
     # Each archetype defined by example thought seeds (its "training set").
+    # v2: expanded from 6 to 24 archetypes — 7+ billion people need nuance,
+    # not 5 buckets. Every thought is unique; the archetype is only a soft
+    # reference point, not the identity.
     ARCHETYPES: dict[str, list[str]] = {
         "Ranger": [
             "scan the horizon for movement",
@@ -117,11 +120,138 @@ class EmbeddingClassifier(ClassifierPort):
             "alone in the shadow of loss",
         ],
         "Wanderer": [
-            "a calm quiet morning",
-            "walking through the forest",
-            "the river flows gently",
-            "resting under the open sky",
-            "wondering where to go next",
+            "where does this road lead",
+            "i am searching for something",
+            "follow the unknown path",
+            "journey across the wasteland",
+            "never stay in one place",
+        ],
+        "Scout": [
+            "check the perimeter",
+            "is the coast clear",
+            "scout ahead and report",
+            "explore the unknown region",
+            "be the first to see",
+        ],
+        # v2 expansions — 18 new archetypes for richer nuance
+        "Weaver": [
+            "connect these ideas together",
+            "find the pattern in the chaos",
+            "weave a story from fragments",
+            "join the dots",
+            "make sense of the noise",
+        ],
+        "Forger": [
+            "build something new",
+            "shape raw material into form",
+            "craft with intention",
+            "forge through the fire",
+            "create where there was nothing",
+        ],
+        "Listener": [
+            "hear what is not being said",
+            "listen to their silence",
+            "the quiet speaks louder",
+            "attend to the whispered",
+            "hear between the words",
+        ],
+        "Sentinel": [
+            "stand guard while i rest",
+            "watch over this place",
+            "protect what is vulnerable",
+            "never sleep until safe",
+            "guard the threshold",
+        ],
+        "Cartographer": [
+            "map the unexplored territory",
+            "make a map of my mind",
+            "chart the unknown waters",
+            "where are we on this map",
+            "draw the boundaries",
+        ],
+        "Cultivator": [
+            "nurture what is growing",
+            "water the seed of an idea",
+            "tend the garden patiently",
+            "growth takes time",
+            "foster the small things",
+        ],
+        "Oracle": [
+            "what will happen next",
+            "see into the future",
+            "foretell the outcome",
+            "glimpse what is coming",
+            "read the signs",
+        ],
+        "Catalyst": [
+            "start the reaction",
+            "ignite the change",
+            "be the spark",
+            "set things in motion",
+            "break the stillness",
+        ],
+        "Anchored": [
+            "hold steady through the storm",
+            "stay grounded",
+            "be the still point",
+            "root deep and endure",
+            "weather this together",
+        ],
+        "Trickster": [
+            "flip the perspective",
+            "what if it is the opposite",
+            "question everything",
+            "laugh at the absurd",
+            "turn the world upside down",
+        ],
+        "Cipher": [
+            "decode the hidden message",
+            "crack the encryption",
+            "find the meaning beneath",
+            "the truth is disguised",
+            "translate the unknown tongue",
+        ],
+        "Gatherer": [
+            "collect what is scattered",
+            "bring the pieces together",
+            "gather the resources",
+            "find what is lost",
+            "assemble the fragments of meaning",
+        ],
+        "Navigator": [
+            "steer through the storm",
+            "find the way home",
+            "navigate by the stars",
+            "choose the right course",
+            "guide through uncertainty",
+        ],
+        "Reflector": [
+            "see yourself in this surface",
+            "hold up the mirror",
+            "reflect on what has been",
+            "contemplate the depths",
+            "turn inward",
+        ],
+        "Ember": [
+            "keep the flame alive",
+            "the fire is low but burning",
+            "tend the dying ember",
+            "warmth persists in the cold",
+            "hold on to the light",
+        ],
+        "Channel": [
+            "let it flow through you",
+            "be the conduit",
+            "transmit what must be said",
+            "open the channel",
+            "receive the signal",
+        ],
+        "Shelter": [
+            "find refuge here",
+            "i need a safe place",
+            "protect me from the storm",
+            "this is a sanctuary",
+            "rest now you are safe",
         ],
     }
 

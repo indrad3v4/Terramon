@@ -130,6 +130,7 @@ class TerramonState(rx.State):
     goal_reached: bool = False
     reflection: str = ""
     insight: str = ""
+    place: str = ""  # v2: geographic anchor — "Kraków, Poland" or "50.06, 19.94"
     intelligence: int = 0
     photo_mode: bool = False
     summoning: bool = False  # animation flag (SIN 1 fix: loading state)
@@ -185,6 +186,11 @@ class TerramonState(rx.State):
             else ""
         )
 
+        self.place = ""
+        if result.insight and result.insight.geo:
+            g = result.insight.geo
+            self.place = g.place_name or f"{g.lat:.2f}, {g.lon:.2f}"
+
         # Lesson 05: chain rule → autograd → confidence
         import math
         scores = _scores(text)
@@ -233,7 +239,7 @@ def _price_for(rarity: str) -> int:
 
 def _seed_to_card(seed: ThoughtSeed) -> dict:
     rarity = seed.rarity if isinstance(seed.rarity, str) else seed.rarity.value
-    return {
+    card = {
         "agent": seed.summoned_agent,
         "rarity": rarity,
         "sigil": _RARITY_SIGIL.get(rarity, "·"),
@@ -243,6 +249,10 @@ def _seed_to_card(seed: ThoughtSeed) -> dict:
         "timestamp": seed.timestamp,
         "insight": f"INSIGHT: {seed.insight.therefore}" if seed.insight else "",
     }
+    # v2: geographic anchor — if the creature was born at a real place
+    if seed.lat or seed.lon or seed.place_name:
+        card["place"] = seed.place_name or f"{seed.lat:.2f}, {seed.lon:.2f}"
+    return card
 
 
 def terra_card(item: dict) -> rx.Component:
@@ -259,6 +269,17 @@ def terra_card(item: dict) -> rx.Component:
             rx.heading(item["agent"], size="5", color=item["color"]),
             rx.text(item["thought"], font_style="italic",
                     color="#9ca3af", font_size="0.75em", max_width="200px"),
+            # v2: geo anchor — show where on Earth this creature was born
+            rx.cond(
+                item.get("place"),
+                rx.hstack(
+                    rx.text("📍", font_size="0.7em"),
+                    rx.text(item["place"], font_size="0.65em", color="#6b7280"),
+                    spacing="1",
+                    align="center",
+                ),
+                rx.fragment(),
+            ),
             spacing="1",
             align="center",
         ),
@@ -357,6 +378,18 @@ def creature_card() -> rx.Component:
                 rx.text(TerramonState.intelligence.to_string() + "%",
                         font_size="0.75em", color="#c4b5fd", font_weight="bold"),
                 spacing="1",
+            ),
+            # v2: geo anchor — show where on Earth this creature was born
+            rx.cond(
+                TerramonState.place != "",
+                rx.hstack(
+                    rx.text("📍", font_size="0.8em"),
+                    rx.text(TerramonState.place, font_size="0.75em",
+                            color="#6b7280", font_style="italic"),
+                    spacing="1",
+                    align="center",
+                ),
+                rx.fragment(),
             ),
             # SIN 8: MINT with explanation tooltip
             rx.cond(
@@ -522,16 +555,25 @@ def index() -> rx.Component:
                     width="100%",
                     max_width="380px",
                 ),
-                # SIN 3: better empty state hook
+                # v2: Terra = real planet Earth
                 rx.vstack(
-                    rx.text("✦", color="#c4b5fd", font_size="1.5em"),
+                    rx.text("🌍", color="#c4b5fd", font_size="1.8em"),
                     rx.text(
-                        "Your world is quiet. Show me what you see — "
-                        "and who you are when you see it.",
+                        "7 billion people. Billions of thoughts a day. "
+                        "Each one becomes a creature somewhere on this planet.",
                         color="#c4b5fd",
-                        font_size="0.95em",
+                        font_size="0.9em",
                         text_align="center",
                         max_width="320px",
+                    ),
+                    rx.text(
+                        "The world is the game map. "
+                        "Capture a moment — meet the creature it becomes.",
+                        color="#9ca3af",
+                        font_size="0.8em",
+                        text_align="center",
+                        max_width="320px",
+                        font_style="italic",
                     ),
                     spacing="2",
                     align="center",
