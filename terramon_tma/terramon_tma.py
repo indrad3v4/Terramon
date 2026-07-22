@@ -41,6 +41,7 @@ from terramon.domain.rarity import Rarity
 from terramon.domain.thought_seed import ThoughtSeed
 from terramon.events.bus import EventBus
 from terramon.application.insight_engine import _scores, _THEMES
+from terramon.application.agent_service import AgentService
 from tools.time_tool import get_current_time
 
 
@@ -59,6 +60,9 @@ _SERVICE = SummonService(
     clock=get_current_time,
 )
 _LOOP = GameLoop(_SERVICE, PlayerProgress(goal_distinct=5))
+
+# Agent service for creature interaction (Tamagotchi×Pokemon)
+_AGENT_SVC = AgentService(_MEMORY)
 
 _RARITY_COLOR = {
     "common": "#9ca3af",
@@ -134,6 +138,16 @@ class TerramonState(rx.State):
     intelligence: int = 0
     photo_mode: bool = False
     summoning: bool = False  # animation flag (SIN 1 fix: loading state)
+
+    # Tamagotchi×Pokemon: creature agent interaction
+    selected_agent_id: str = ""
+    agent_hunger: int = 0
+    agent_energy: int = 0
+    agent_happiness: int = 0
+    agent_message: str = ""
+    agent_name: str = ""
+    agent_evolution: int = 0
+    agent_last_message: str = ""
 
     # The player's terra: every creature that ever lived (persisted).
     terra: list[dict] = []
@@ -226,6 +240,86 @@ class TerramonState(rx.State):
     def capture(self):
         """Open the photo-entry path (simulated in this MVP)."""
         self.photo_mode = True
+
+    # ── Tamagotchi×Pokemon interaction handlers ───────────
+
+    def _get_current_agent(self):
+        """Return the CreatureAgent for the currently selected creature."""
+        from terramon.domain.creature_agent import CreatureAgent
+        from terramon.domain.insight import Insight
+        # Look up in persisted seeds
+        seeds = _MEMORY.load_all_seeds()
+        for s in seeds:
+            aid = f"CR{s.summoned_agent[:2].upper()}-?..."
+            # For now, create a fresh agent from the most recent seed
+            # (persistent agent storage is next iteration)
+        # Fallback: create from last summoned
+        if self.agent:
+            ins = Insight(
+                driver="",
+                barrier="",
+                therefore=self.insight.replace("INSIGHT: ", ""),
+                archetype=self.agent,
+            )
+            return _AGENT_SVC.create_agent(self.thought, self.agent, ins)
+        return None
+
+    @rx.event
+    def feed_agent(self):
+        agent = self._get_current_agent()
+        if not agent:
+            return
+        msg = _AGENT_SVC.feed(agent)
+        self.agent_hunger = agent.hunger
+        self.agent_energy = agent.energy
+        self.agent_happiness = agent.happiness
+        self.agent_message = msg.text
+        self.agent_name = agent.name
+
+    @rx.event
+    def play_with_agent(self):
+        agent = self._get_current_agent()
+        if not agent:
+            return
+        msg = _AGENT_SVC.play(agent)
+        self.agent_hunger = agent.hunger
+        self.agent_energy = agent.energy
+        self.agent_happiness = agent.happiness
+        self.agent_message = msg.text
+        self.agent_name = agent.name
+
+    @rx.event
+    def rest_agent(self):
+        agent = self._get_current_agent()
+        if not agent:
+            return
+        msg = _AGENT_SVC.rest(agent)
+        self.agent_hunger = agent.hunger
+        self.agent_energy = agent.energy
+        self.agent_happiness = agent.happiness
+        self.agent_message = msg.text
+        self.agent_name = agent.name
+
+    @rx.event
+    def talk_to_agent(self):
+        agent = self._get_current_agent()
+        if not agent:
+            return
+        msg = _AGENT_SVC.talk(agent)
+        self.agent_happiness = agent.happiness
+        self.agent_message = msg.text
+        self.agent_name = agent.name
+
+    @rx.event
+    def evolve_agent(self):
+        agent = self._get_current_agent()
+        if not agent:
+            return
+        msg = _AGENT_SVC.evolve(agent)
+        self.agent_evolution = agent.evolution_stage
+        self.agent_message = msg.text
+        self.agent_last_message = msg.text
+        self.agent_name = agent.name
 
 
 def _price_for(rarity: str) -> int:
@@ -448,6 +542,109 @@ def creature_card() -> rx.Component:
     )
 
 
+def creature_care_panel() -> rx.Component:
+    """Tamagotchi×Pokemon interaction panel — shows stats + interaction buttons."""
+    return rx.cond(
+        TerramonState.has_summoned,
+        rx.box(
+            rx.vstack(
+                # Agent name + evolution stage
+                rx.hstack(
+                    rx.text(TerramonState.agent_name, font_size="0.85em",
+                            color="#e5e7eb", font_weight="bold"),
+                    rx.cond(
+                        TerramonState.agent_evolution > 0,
+                        rx.text("✦ Evolved", font_size="0.7em", color="#f59e0b"),
+                        rx.fragment(),
+                    ),
+                    spacing="2",
+                ),
+                # Stat bars (inlined to avoid Var compile-time eval)
+                rx.text("🍽️ Hunger", font_size="0.7em", color="#9ca3af"),
+                rx.box(
+                    rx.box(
+                        style={"width": "50%", "height": "100%",
+                               "background": "linear-gradient(90deg, #f59e0b, #f59e0bdd)",
+                               "border_radius": "999px",
+                               "transition": "width 0.3s ease"},
+                    ),
+                    width="100%", height="8px",
+                    background="#27272a", border_radius="999px", overflow="hidden",
+                ),
+                rx.text("⚡ Energy", font_size="0.7em", color="#9ca3af"),
+                rx.box(
+                    rx.box(
+                        style={"width": "50%", "height": "100%",
+                               "background": "linear-gradient(90deg, #22c55e, #22c55edd)",
+                               "border_radius": "999px",
+                               "transition": "width 0.3s ease"},
+                    ),
+                    width="100%", height="8px",
+                    background="#27272a", border_radius="999px", overflow="hidden",
+                ),
+                rx.text("❤️ Happiness", font_size="0.7em", color="#9ca3af"),
+                rx.box(
+                    rx.box(
+                        style={"width": "50%", "height": "100%",
+                               "background": "linear-gradient(90deg, #ef4444, #ef4444dd)",
+                               "border_radius": "999px",
+                               "transition": "width 0.3s ease"},
+                    ),
+                    width="100%", height="8px",
+                    background="#27272a", border_radius="999px", overflow="hidden",
+                ),
+                # Agent message (speech bubble)
+                rx.cond(
+                    TerramonState.agent_message != "",
+                    rx.box(
+                        rx.text(TerramonState.agent_message, font_size="0.8em",
+                                color="#d8b4fe", font_style="italic",
+                                text_align="center"),
+                        padding="0.5em 1em",
+                        background="#1e1e2a",
+                        border_radius="12px",
+                        border="1px solid #27272a",
+                        width="100%",
+                    ),
+                    rx.fragment(),
+                ),
+                # Interaction buttons grid (2x2)
+                rx.grid(
+                    rx.button("🍽️ Feed", on_click=TerramonState.feed_agent,
+                              variant="soft", size="2", width="100%",
+                              color_scheme="amber"),
+                    rx.button("🎮 Play", on_click=TerramonState.play_with_agent,
+                              variant="soft", size="2", width="100%",
+                              color_scheme="green"),
+                    rx.button("💤 Rest", on_click=TerramonState.rest_agent,
+                              variant="soft", size="2", width="100%",
+                              color_scheme="blue"),
+                    rx.button("💬 Talk", on_click=TerramonState.talk_to_agent,
+                              variant="soft", size="2", width="100%",
+                              color_scheme="purple"),
+                    columns="2",
+                    spacing="2",
+                    width="100%",
+                ),
+                # Evolve button
+                rx.button("✦ EVOLVE", on_click=TerramonState.evolve_agent,
+                          variant="outline", size="2", width="100%",
+                          color_scheme="amber"),
+                spacing="3",
+                align="center",
+                width="100%",
+            ),
+            border="1px solid #27272a",
+            border_radius="12px",
+            padding="1em",
+            background="#141418",
+            width="100%",
+            max_width="380px",
+        ),
+        rx.fragment(),
+    )
+
+
 def index() -> rx.Component:
     """Single-screen TMA: input -> summon -> card + terra grid."""
     return rx.center(
@@ -527,6 +724,8 @@ def index() -> rx.Component:
 
             progress_header(),
             rx.cond(TerramonState.has_summoned, creature_card(), rx.fragment()),
+            # Tamagotchi×Pokemon: creature care panel
+            creature_care_panel(),
 
             # MAP MODE stub
             rx.tooltip(
