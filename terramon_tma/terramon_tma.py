@@ -42,7 +42,12 @@ from terramon.domain.thought_seed import ThoughtSeed
 from terramon.events.bus import EventBus
 from terramon.application.insight_engine import _scores, _THEMES
 from terramon.application.agent_service import AgentService
+from terramon.application.llm_behavior import set_api_key as _init_llm
 from tools.time_tool import get_current_time
+
+# Initialize LLM-powered creature behavior from env
+import os
+_init_llm(os.environ.get("OPENROUTER_API_KEY", ""))
 
 
 # One classifier instance (prototypes precomputed once).
