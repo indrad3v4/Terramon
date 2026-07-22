@@ -273,40 +273,28 @@ class CreatureAgent:
 
     def _archetype_verb(self) -> str:
         verbs = {
-            "Ranger": "scans", "Archivist": "recalls", "Strategist": "plots",
-            "Mystic": "chants", "Wanderer": "drifts", "Scout": "peers",
-            "Weaver": "spins", "Forger": "shapes", "Listener": "attends",
-            "Sentinel": "watches", "Cartographer": "traces", "Cultivator": "tends",
-            "Oracle": "sees", "Catalyst": "sparks", "Anchored": "grounds",
-            "Trickster": "flips", "Cipher": "decodes", "Gatherer": "collects",
-            "Navigator": "steers", "Reflector": "mirrors", "Ember": "glows",
-            "Channel": "flows", "Shelter": "holds",
+            "Innocent": "trusts", "Orphan": "longs", "Hero": "fights",
+            "Caregiver": "nurtures", "Explorer": "seeks", "Rebel": "defies",
+            "Lover": "embraces", "Creator": "shapes", "Jester": "laughs",
+            "Sage": "contemplates", "Magician": "transforms", "Ruler": "commands",
         }
         return verbs.get(self.archetype, "watches")
 
     def _archetype_feeling(self) -> str:
         feelings = {
-            "Ranger": "awareness", "Archivist": "weight", "Strategist": "focus",
-            "Mystic": "depth", "Wanderer": "restlessness", "Scout": "curiosity",
-            "Weaver": "connection", "Forger": "intention", "Listener": "stillness",
-            "Sentinel": "vigilance", "Cartographer": "wonder", "Cultivator": "patience",
-            "Oracle": "knowing", "Catalyst": "charge", "Anchored": "rootedness",
-            "Trickster": "lightness", "Cipher": "mystery", "Gatherer": "wholeness",
-            "Navigator": "direction", "Reflector": "clarity", "Ember": "warmth",
-            "Channel": "flow", "Shelter": "safety",
+            "Innocent": "trust", "Orphan": "longing", "Hero": "courage",
+            "Caregiver": "compassion", "Explorer": "wanderlust", "Rebel": "defiance",
+            "Lover": "passion", "Creator": "inspiration", "Jester": "levity",
+            "Sage": "wisdom", "Magician": "wonder", "Ruler": "authority",
         }
         return feelings.get(self.archetype, "presence")
 
     def _archetype_sound(self) -> str:
         sounds = {
-            "Ranger": "rustle", "Archivist": "page-turn", "Strategist": "hmm",
-            "Mystic": "hum", "Wanderer": "footstep", "Scout": "chirp",
-            "Weaver": "click", "Forger": "clang", "Listener": "silence",
-            "Sentinel": "thud", "Cartographer": "scratch", "Cultivator": "sigh",
-            "Oracle": "bell-tone", "Catalyst": "crackle", "Anchored": "deep bass",
-            "Trickster": "giggle", "Cipher": "whisper", "Gatherer": "purr",
-            "Navigator": "wind", "Reflector": "ping", "Ember": "crackle",
-            "Channel": "water-flow", "Shelter": "heartbeat",
+            "Innocent": "bell", "Orphan": "wind through hollow", "Hero": "war drum",
+            "Caregiver": "soft hum", "Explorer": "footstep on gravel", "Rebel": "shatter",
+            "Lover": "heartbeat", "Creator": "chisel on stone", "Jester": "chime",
+            "Sage": "page turn", "Magician": "crystal resonance", "Ruler": "gavel",
         }
         return sounds.get(self.archetype, "breath")
 

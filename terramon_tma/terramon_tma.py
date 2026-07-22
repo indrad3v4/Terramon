@@ -83,12 +83,18 @@ _RARITY_GLOW = {
     "legendary": "0 0 36px rgba(245,158,11,0.55)",
 }
 _ARCHETYPE_LORE = {
-    "Ranger": "Sees what others miss.",
-    "Archivist": "Keeper of what was.",
-    "Strategist": "Turns fear into a plan.",
-    "Mystic": "Speaks with the void.",
-    "Wanderer": "At peace with the open road.",
-    "Scout": "First to arrive.",
+    "Innocent": "Sees the good. Trusts the world.",
+    "Orphan": "Knows what it means to be left out.",
+    "Hero": "Rises to meet every challenge.",
+    "Caregiver": "Gives without counting the cost.",
+    "Explorer": "The horizon is never far enough.",
+    "Rebel": "Questions every answer.",
+    "Lover": "Connection is the only truth.",
+    "Creator": "Builds worlds from nothing.",
+    "Jester": "Laughs in the face of the void.",
+    "Sage": "Seeks the truth beneath the surface.",
+    "Magician": "Transforms the ordinary into the extraordinary.",
+    "Ruler": "Brings order to chaos.",
 }
 
 

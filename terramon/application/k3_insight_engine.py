@@ -49,44 +49,56 @@ def _softmax(scores: list[float]) -> list[float]:
 
 # ---------------------------------------------------------------------------
 # 10 themes
-# ---------------------------------------------------------------------------
+_THEME_NAMES = [
+    "innocent", "orphan", "hero", "caregiver", "explorer",
+    "rebel", "lover", "creator", "jester", "sage", "magician", "ruler",
+]
 
-_N_THEMES = 10
-_THEMES = ["money", "work", "fear", "loneliness", "direction",
-           "connection", "growth", "meaning", "power", "peace"]
-
-_DRIVER = {
-    "money": "to be safe and free of scarcity",
-    "work": "rest and a life outside the grind",
-    "fear": "to be unafraid of what comes next",
-    "loneliness": "to be met and held",
-    "direction": "to know which way to turn",
-    "connection": "to belong somewhere",
-    "growth": "to become more than you are",
-    "meaning": "to make sense of it all",
-    "power": "to stand your ground",
-    "peace": "to find stillness",
+# Expanded DRIVER/BARRIER/THEREFORE for Jung's 12 archetypes
+_DRIVER_BY_THEME: dict[str, str] = {
+    "innocent": "to be safe and free from harm",
+    "orphan": "to belong and be seen",
+    "hero": "to prove your strength and overcome",
+    "caregiver": "to protect and nurture others",
+    "explorer": "to be free and discover",
+    "rebel": "to tear down what is wrong",
+    "lover": "to connect deeply and intimately",
+    "creator": "to build something that never existed",
+    "jester": "to find joy in every moment",
+    "sage": "to know the truth beneath all things",
+    "magician": "to transform reality itself",
+    "ruler": "to bring order and take responsibility",
 }
-_BARRIER = {
-    "money": "money", "work": "work", "fear": "fear",
-    "loneliness": "loneliness", "direction": "direction",
-    "connection": "isolation", "growth": "stagnation",
-    "meaning": "confusion", "power": "helplessness",
-    "peace": "noise",
+_BARRIER_BY_THEME: dict[str, str] = {
+    "innocent": "fear of the unknown",
+    "orphan": "being abandoned",
+    "hero": "weakness and failure",
+    "caregiver": "being unable to help",
+    "explorer": "being trapped",
+    "rebel": "oppression and injustice",
+    "lover": "rejection and solitude",
+    "creator": "emptiness and irrelevance",
+    "jester": "boredom and meaninglessness",
+    "sage": "ignorance and deception",
+    "magician": "powerlessness",
+    "ruler": "chaos and disorder",
 }
-_BEHAVIOR = {
-    "money": "It sits with you in the scarcity and does not look away.",
-    "work": "It clears a small space so you can breathe.",
-    "fear": "It waits by the door so you are not facing it alone.",
-    "loneliness": "It stays close, a warm weight at your side.",
-    "direction": "It walks a little ahead, showing the next step only.",
-    "isolation": "It knits a thread between you and the world.",
-    "stagnation": "It stirs the still water until something new surfaces.",
-    "confusion": "It draws a map from the fragments you give it.",
-    "helplessness": "It plants its feet and says: here, with you.",
-    "noise": "It hums a single note until the noise falls away.",
+_BEHAVIOR_BY_BARRIER: dict[str, str] = {
+    "fear of the unknown": "It stays near you, a quiet presence in the unfamiliar.",
+    "being abandoned": "It presses close and says: I see you. You are not alone.",
+    "weakness and failure": "It stands between you and what breaks you.",
+    "being unable to help": "It offers what it has, which is everything.",
+    "being trapped": "It opens a door you hadn't noticed.",
+    "oppression and injustice": "It breaks the chain that holds you.",
+    "rejection and solitude": "It turns toward you and stays.",
+    "emptiness and irrelevance": "It places something new in your hands.",
+    "boredom and meaninglessness": "It shows you the joke in the dark.",
+    "ignorance and deception": "It holds a lantern to the hidden truth.",
+    "powerlessness": "It shows you the power you already hold.",
+    "chaos and disorder": "It draws a circle and declares: this is yours.",
     "the quiet ordinary": "It settles beside you and listens to what the quiet is saying.",
 }
+_N_THEMES = len(_THEME_NAMES)
 _N_DIM = 64
 
 
@@ -180,12 +192,12 @@ def extract_insight(raw_input: str,
     net = _get_net()
     winner, probs, _ = net.forward(encoded)
 
-    theme = _THEMES[winner]
+    theme = _THEME_NAMES[winner]
     confidence = round(probs[winner] * 100)
 
-    driver = _DRIVER.get(theme, "to be met where you are")
-    barrier = _BARRIER.get(theme, "the quiet ordinary")
-    therefore = _BEHAVIOR.get(barrier, _BEHAVIOR["the quiet ordinary"])
+    driver = _DRIVER_BY_THEME.get(theme, "to be met where you are")
+    barrier = _BARRIER_BY_THEME.get(theme, "the quiet ordinary")
+    therefore = _BEHAVIOR_BY_BARRIER.get(barrier, _BEHAVIOR_BY_BARRIER["the quiet ordinary"])
 
     return Insight(
         driver=driver,

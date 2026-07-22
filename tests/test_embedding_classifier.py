@@ -47,11 +47,11 @@ def test_self_similarity_is_one():
 def test_distinct_thoughts_summon_distinct_agents():
     clf = EmbeddingClassifier()
     cases = {
-        "look at this image on the camera": "Ranger",
-        "recall the past history records": "Archivist",
-        "plan our attack on the enemy": "Strategist",
-        "i surrender to the ancient void": "Mystic",
-        "a calm quiet walk in the forest": "Wanderer",
+        "i trust that this is right": "Innocent",
+        "nobody understands me": "Orphan",
+        "i will overcome this": "Hero",
+        "let me help you please": "Caregiver",
+        "don't fence me in": "Explorer",
     }
     got = {text: clf.classify(text) for text in cases}
     # at least 4 of 5 land on their intended archetype (soft benchmark)
@@ -83,10 +83,10 @@ def test_play_session_reaches_goal(tmp_path):
     )
     loop = GameLoop(svc, PlayerProgress(goal_distinct=3))
     thoughts = [
-        "look at the camera image",
-        "recall the past records",
-        "plan the attack",
-        "i am the storm lord",
+        "I trust that this is right",       # → Innocent
+        "nobody understands me",            # → Orphan
+        "I will overcome this",             # → Hero
+        "rules are meant to be broken",     # → Rebel
     ]
     reached = False
     for t in thoughts:

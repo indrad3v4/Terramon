@@ -84,174 +84,98 @@ def _cosine(a: dict[int, float], b: dict[int, float]) -> float:
 class EmbeddingClassifier(ClassifierPort):
     """Nearest-centroid classifier over hashed TF vectors."""
 
-    DEFAULT_AGENT = "Scout"
+    DEFAULT_AGENT = "Innocent"
 
     # Each archetype defined by example thought seeds (its "training set").
-    # v2: expanded from 6 to 24 archetypes — 7+ billion people need nuance,
-    # not 5 buckets. Every thought is unique; the archetype is only a soft
-    # reference point, not the identity.
+    # v3: Jung's 12 archetypes (replaces 24 made-up names).
+    # Grounded in Jungian psychology — every creature is a real psychological
+    # pattern, not shower thoughts. The 512-dim embedding space still captures
+    # unique nuance within each archetype (C option: start with Jung, expand
+    # with continuous embedding).
     ARCHETYPES: dict[str, list[str]] = {
-        "Ranger": [
-            "scan the horizon for movement",
-            "i see something in the distance",
-            "look at this image and tell me",
-            "watch the camera feed",
-            "observe the visual field",
+        "Innocent": [
+            "i just want to be safe",
+            "everything will be okay",
+            "i trust that this is right",
+            "keep me from harm",
+            "i believe in the good of people",
         ],
-        "Archivist": [
-            "recall what happened before",
-            "log this into the records",
-            "remember the past events",
-            "search the history archive",
-            "store this memory forever",
+        "Orphan": [
+            "i don't belong anywhere",
+            "nobody understands me",
+            "we are all in this together",
+            "i just want to fit in",
+            "why am i always left out",
         ],
-        "Strategist": [
-            "plan the next attack",
-            "defend the territory",
-            "what is our best move",
-            "outmaneuver the enemy",
-            "control the battlefield",
+        "Hero": [
+            "i will overcome this",
+            "nothing can stop me now",
+            "i have to be strong",
+            "face the challenge head on",
+            "this is my trial to overcome",
         ],
-        "Mystic": [
-            "i am the storm lord",
-            "i surrender to the void",
-            "ascend beyond the mortal",
-            "command the ancient truth",
-            "alone in the shadow of loss",
+        "Caregiver": [
+            "let me help you",
+            "i need to take care of them",
+            "your pain matters to me",
+            "i give because i care",
+            "protect the vulnerable",
         ],
-        "Wanderer": [
-            "where does this road lead",
-            "i am searching for something",
-            "follow the unknown path",
-            "journey across the wasteland",
-            "never stay in one place",
+        "Explorer": [
+            "i want to see what's out there",
+            "don't fence me in",
+            "the road is calling me",
+            "i need to find my own path",
+            "freedom is everything",
         ],
-        "Scout": [
-            "check the perimeter",
-            "is the coast clear",
-            "scout ahead and report",
-            "explore the unknown region",
-            "be the first to see",
+        "Rebel": [
+            "rules are meant to be broken",
+            "i won't follow their system",
+            "tear it all down",
+            "they can't tell me what to do",
+            "revolution starts now",
         ],
-        # v2 expansions — 18 new archetypes for richer nuance
-        "Weaver": [
-            "connect these ideas together",
-            "find the pattern in the chaos",
-            "weave a story from fragments",
-            "join the dots",
-            "make sense of the noise",
+        "Lover": [
+            "i want to be close to you",
+            "love is all that matters",
+            "i give you my whole heart",
+            "being with you is enough",
+            "i crave connection and intimacy",
         ],
-        "Forger": [
-            "build something new",
-            "shape raw material into form",
-            "craft with intention",
-            "forge through the fire",
-            "create where there was nothing",
+        "Creator": [
+            "i will build something new",
+            "make something from nothing",
+            "my imagination is limitless",
+            "create what has never been seen",
+            "art is how i breathe",
         ],
-        "Listener": [
-            "hear what is not being said",
-            "listen to their silence",
-            "the quiet speaks louder",
-            "attend to the whispered",
-            "hear between the words",
+        "Jester": [
+            "life is a joke enjoy it",
+            "make them laugh",
+            "don't take it so seriously",
+            "joy in every moment",
+            "laughter is the best medicine",
         ],
-        "Sentinel": [
-            "stand guard while i rest",
-            "watch over this place",
-            "protect what is vulnerable",
-            "never sleep until safe",
-            "guard the threshold",
+        "Sage": [
+            "the truth will set me free",
+            "i seek wisdom and understanding",
+            "knowledge is power",
+            "let me understand why",
+            "enlighten me with your wisdom",
         ],
-        "Cartographer": [
-            "map the unexplored territory",
-            "make a map of my mind",
-            "chart the unknown waters",
-            "where are we on this map",
-            "draw the boundaries",
+        "Magician": [
+            "transform this situation",
+            "i can make things happen",
+            "believe and it will come",
+            "the universe is on my side",
+            "turn lead into gold",
         ],
-        "Cultivator": [
-            "nurture what is growing",
-            "water the seed of an idea",
-            "tend the garden patiently",
-            "growth takes time",
-            "foster the small things",
-        ],
-        "Oracle": [
-            "what will happen next",
-            "see into the future",
-            "foretell the outcome",
-            "glimpse what is coming",
-            "read the signs",
-        ],
-        "Catalyst": [
-            "start the reaction",
-            "ignite the change",
-            "be the spark",
-            "set things in motion",
-            "break the stillness",
-        ],
-        "Anchored": [
-            "hold steady through the storm",
-            "stay grounded",
-            "be the still point",
-            "root deep and endure",
-            "weather this together",
-        ],
-        "Trickster": [
-            "flip the perspective",
-            "what if it is the opposite",
-            "question everything",
-            "laugh at the absurd",
-            "turn the world upside down",
-        ],
-        "Cipher": [
-            "decode the hidden message",
-            "crack the encryption",
-            "find the meaning beneath",
-            "the truth is disguised",
-            "translate the unknown tongue",
-        ],
-        "Gatherer": [
-            "collect what is scattered",
-            "bring the pieces together",
-            "gather the resources",
-            "find what is lost",
-            "assemble the fragments of meaning",
-        ],
-        "Navigator": [
-            "steer through the storm",
-            "find the way home",
-            "navigate by the stars",
-            "choose the right course",
-            "guide through uncertainty",
-        ],
-        "Reflector": [
-            "see yourself in this surface",
-            "hold up the mirror",
-            "reflect on what has been",
-            "contemplate the depths",
-            "turn inward",
-        ],
-        "Ember": [
-            "keep the flame alive",
-            "the fire is low but burning",
-            "tend the dying ember",
-            "warmth persists in the cold",
-            "hold on to the light",
-        ],
-        "Channel": [
-            "let it flow through you",
-            "be the conduit",
-            "transmit what must be said",
-            "open the channel",
-            "receive the signal",
-        ],
-        "Shelter": [
-            "find refuge here",
-            "i need a safe place",
-            "protect me from the storm",
-            "this is a sanctuary",
-            "rest now you are safe",
+        "Ruler": [
+            "take charge of this situation",
+            "i must be in control",
+            "lead the people",
+            "order from chaos",
+            "power and responsibility",
         ],
     }
 
