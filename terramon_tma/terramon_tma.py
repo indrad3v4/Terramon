@@ -218,15 +218,20 @@ class TerramonState(rx.State):
         seeds = _MEMORY.load_all_seeds()
         self.reflection = _reflect_on_memory(seeds, result.agent)
 
-        self.insight = (
-            f"INSIGHT: {result.insight.therefore}"
-            if result.insight is not None
-            else ""
-        )
+        # Insight from the most recent seed (TurnResult doesn't carry it)
+        if seeds:
+            last_insight = seeds[-1].insight
+            self.insight = (
+                f"INSIGHT: {last_insight.therefore}"
+                if last_insight is not None
+                else ""
+            )
+        else:
+            self.insight = ""
 
         self.place = ""
-        if result.insight and result.insight.geo:
-            g = result.insight.geo
+        if seeds and seeds[-1].insight and seeds[-1].insight.geo:
+            g = seeds[-1].insight.geo
             self.place = g.place_name or f"{g.lat:.2f}, {g.lon:.2f}"
 
         # Init agent stats for Tamagotchi×Pokemon interaction
