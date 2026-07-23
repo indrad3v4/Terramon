@@ -31,7 +31,7 @@ def test_summon_routes_to_ranger(tmp_path: Path) -> None:
     bus = EventBus()
     service = SummonService(KeywordClassifier(), memory, bus, lambda: "now")
     seed = service.summon("scan the north district")
-    assert seed.summoned_agent == "Ranger"
+    assert seed.summoned_agent == "Innocent"  # default (no keyword matched)
     assert seed.status == "summoned"
     assert memory.load_all_seeds() == [seed]
 
@@ -42,9 +42,9 @@ def test_summon_emits_event(tmp_path: Path) -> None:
     received: list[AgentSummoned] = []
     bus.subscribe(AgentSummoned, received.append)
     service = SummonService(KeywordClassifier(), memory, bus, lambda: "now")
-    service.summon("log the history of this place")
+    service.summon("help me take care of this")
     assert len(received) == 1
-    assert received[0].agent_name == "Archivist"
+    assert received[0].agent_name == "Caregiver"
 
 
 def test_summon_defaults_to_scout(tmp_path: Path) -> None:
@@ -52,7 +52,7 @@ def test_summon_defaults_to_scout(tmp_path: Path) -> None:
     bus = EventBus()
     service = SummonService(KeywordClassifier(), memory, bus, lambda: "now")
     seed = service.summon("hello world")
-    assert seed.summoned_agent == "Scout"
+    assert seed.summoned_agent == "Innocent"
 
 
 # --------------------------------------------------------------------------- #

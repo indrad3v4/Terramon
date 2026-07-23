@@ -183,7 +183,7 @@ def extract_insight(raw_input: str,
         return Insight(
             driver="to be met where you are",
             barrier="the quiet ordinary",
-            therefore=_BEHAVIOR["the quiet ordinary"],
+            therefore=_BEHAVIOR_BY_BARRIER["the quiet ordinary"],
         )
 
     from terramon.application.insight_engine import encode as old_encode

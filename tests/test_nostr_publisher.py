@@ -92,7 +92,7 @@ def test_publish_records_relay_failures():
         relays=["wss://good.relay", "wss://bad.relay"],
         sender=flaky_sender,
     )
-    result = pub.publish(ShareCard(thought="x", agent="Scout", rarity="common"))
+    result = pub.publish(ShareCard(thought="x", agent="Innocent", rarity="common"))
     assert result.relays_ok == ["wss://good.relay"]
     assert result.relays_failed == ["wss://bad.relay"]
 
@@ -102,4 +102,4 @@ def test_missing_key_raises():
 
     pub = NostrPublisher(seckey_hex="", sender=lambda r, f: None)
     with pytest.raises(RuntimeError):
-        pub.publish(ShareCard(thought="x", agent="Scout", rarity="common"))
+        pub.publish(ShareCard(thought="x", agent="Innocent", rarity="common"))

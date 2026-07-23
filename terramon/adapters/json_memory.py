@@ -36,7 +36,18 @@ class JsonMemory(MemoryPort):
                 "driver": seed.insight.driver,
                 "barrier": seed.insight.barrier,
                 "therefore": seed.insight.therefore,
+                # v3 fields (Jungian archetype + confidence)
+                "archetype": seed.insight.archetype,
+                "nuance": seed.insight.nuance,
+                "confidence": seed.insight.confidence,
             }
+            # Persist geo if present
+            if seed.insight.geo is not None:
+                record["insight"]["geo"] = {
+                    "lat": seed.insight.geo.lat,
+                    "lon": seed.insight.geo.lon,
+                    "place_name": seed.insight.geo.place_name,
+                }
         with self.path.open("a", encoding="utf-8") as file:
             file.write(json.dumps(record, ensure_ascii=False) + "\n")
 
@@ -53,6 +64,11 @@ class JsonMemory(MemoryPort):
             # Rehydrate the insight (FIX 2) if the persisted record carries one.
             insight_data = record.pop("insight", None)
             if insight_data:
+                # v3: convert geo dict to GeoContext if present
+                geo_data = insight_data.pop("geo", None)
+                if geo_data:
+                    from terramon.domain.insight import GeoContext
+                    insight_data["geo"] = GeoContext(**geo_data)
                 record["insight"] = Insight(**insight_data)
             seeds.append(ThoughtSeed(**record))
         return seeds
