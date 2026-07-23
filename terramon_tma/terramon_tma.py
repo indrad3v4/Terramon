@@ -1205,8 +1205,15 @@ def index() -> rx.Component:
 
 
 app = rx.App(
-    theme=rx.theme(appearance="dark", accent_color="amber"),
+    # theme= deprecatd in 0.9.0 — setting dark theme via style instead
 )
+app.style = {
+    "body": {
+        "background_color": "#0b0b0f",
+        "color": "#f5f5f5",
+        "font_family": "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+    }
+}
 # Hide Reflex branding badge in TMA
 app._disable_reflex_branding = True
 app.add_page(index, title="Terramon — summon your thoughts", on_load=TerramonState.load_terra)
