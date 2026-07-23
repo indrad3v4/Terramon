@@ -1,242 +1,150 @@
-# 🌍 Terramon — *Freedom From Thoughts Through Play*
+# 🌍 Terramon — Your thoughts become creatures that live on Earth
 
-> **The most expensive therapist is your own brain. Terramon is the indulgence.**
+> **Type a thought. Meet the creature it becomes. Feed, play, and evolve it — like Tamagotchi × Pokémon, but born from your mind.**
 
-![Python](https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white)
-![Reflex](https://img.shields.io/badge/Reflex-6E56CF?style=for-the-badge&logo=reflex&logoColor=white)
-![AMD](https://img.shields.io/badge/AMD-ED1C24?style=for-the-badge&logo=amd&logoColor=white)
-![Fireworks AI](https://img.shields.io/badge/Fireworks_AI-FF6B35?style=for-the-badge&logo=fireworks&logoColor=white)
-![Lightning](https://img.shields.io/badge/Lightning-792EE5?style=for-the-badge&logo=bitcoin&logoColor=white)
-
----
-
-## 🎯 The Idea
-
-**The problem:** People carry their thoughts inside. Therapy costs €80-150/session. Journaling doesn't help. Friends don't get it.
-
-**Our take:** What if your thoughts became *creatures* that live OUTSIDE your head? You type → an AI classifies your intent → the right Codex Creature is summoned. The thought lives THERE, not in your skull.
-
-**The insight:** *Gaming is cheaper than therapy. Summoning is more effective than journaling.*
-
-| DRIVER | BARRIER | THEREFORE | 🔑 INSIGHT |
-|--------|---------|-----------|------------|
-| "I want freedom from my thoughts" | "Therapy is expensive. Journaling doesn't help. Friends don't get it." | "I summon my thoughts as creatures in a game — they live THERE" | **Gaming > therapy. Summoning > journaling.** |
+[![Live Demo](https://img.shields.io/badge/Demo-Telegram_%40terrramonBot-2CA5E0?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/terrramonBot/terramon)
+[![Python](https://img.shields.io/badge/Python-3.13-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
+[![Reflex](https://img.shields.io/badge/Reflex-0.9.x-6E56CF?style=for-the-badge&logo=reflex&logoColor=white)](https://reflex.dev)
+[![DeepSeek V4](https://img.shields.io/badge/LLM-DeepSeek_V4_Flash-4A90D9?style=for-the-badge&logo=deepseek&logoColor=white)](https://openrouter.ai)
+[![Railway](https://img.shields.io/badge/Deploy-Railway-0B0D0E?style=for-the-badge&logo=railway&logoColor=white)](https://railway.app)
+[![Tests](https://img.shields.io/badge/Tests-68_passing-22c55e?style=for-the-badge)](/root/Terramon/tests)
 
 ---
 
-## 🏆 Hackathon Track
+## 🎯 What It Is
 
-AMD Developer Hackathon ACT II — **Track 3: Unicorn** ("Build your startup")
+Terramon is a **Telegram Mini App** where every thought you type becomes an AI creature with:
 
-| Date | Event | Details |
-|------|-------|---------|
-| **Jul 6–11, 2026** | AMD Developer Hackathon ACT II | lablab.ai, $20K+ prize pool |
-| **Track** | Unicorn — "Build your startup" | Creativity, originality, real potential |
-| **Format** | Containerised submission | Dockerfile required |
-| **Resources** | $100 AMD Cloud + $50 Fireworks AI | AMD AI Developer Program |
+- **Personality** — one of **12 Jungian archetypes** (Hero, Sage, Jester, Caregiver…) determines how it speaks and behaves
+- **Needs** — hunger, energy, happiness decay over time; you feed, play, rest, and talk to keep it alive
+- **Growth** — gain XP through interaction, level up, evolve when conditions are met (logistic probability)
+- **Memory** — the creature remembers your past interactions and reflects on them via DeepSeek V4 Flash
+- **Geography** — creatures are anchored to real places on Earth (your photo becomes their birthplace)
 
----
+Behind every creature is an **Insight Engine** — a neural network that extracts the hidden DRIVER + BARRIER → THEREFORE from your thought. The creature doesn't just exist; it *acts* on the psychological mechanism that birthed it.
 
-## 🧠 Current Architecture
+### Live Demo
 
-```
-thought seed → IntentRouter → Codex Creature → SummonEvent → EventBus → (future UI)
-                    ↓
-          ClassifierPort (Protocol)
-                    ↓
-          KeywordClassifier ──→ (next) Fireworks AI on AMD GPU
-                    ↓
-          Territory system + Lightning (planned)
-```
-
-**Hexagonal ("Ports & Adapters") + Event-Driven**
-
-| Layer | What lives here |
-|-------|-----------------|
-| `domain/` | Pure data classes — no dependencies |
-| `ports/` | Protocol contracts (ClassifierPort, MemoryPort) |
-| `adapters/` | Implementations (KeywordClassifier, JsonMemory) |
-| `events/` | Typed event bus (AgentSummoned, etc.) |
-| `application/` | IntentRouter, SummonService — the core loop |
-| `agents/` | Codex creatures (Scout, Ranger, Archivist, Strategist) |
-
-### The Summon Loop
-
-```
-1. You type a thought seed → "I feel lost tonight"
-2. IntentRouter.classify() → matches an agent
-3. Codex Creature summoned (e.g. Sage)
-4. ThoughtSeed saved to memory (JSON)
-5. AgentSummoned event published on EventBus
-6. (Future) Reflex UI renders the summoned creature
-```
-
-### Current Agents
-
-| Agent | Trigger Keywords | Role |
-|-------|-----------------|------|
-| **Scout** *(default)* | — | First responder. Processes and reports observations. |
-| **Ranger** | `scan`, `image`, `photo`, `camera`, `see`, `look` | Visual analysis and territory scanning. |
-| **Archivist** | `log`, `history`, `record`, `memory`, `past`, `archive` | Record keeping and historical research. |
-| **Strategist** | `plan`, `attack`, `defend`, `strategy`, `move`, `territory` | Territory management and tactical planning. |
-
-> **Current classifier:** keyword-based. **Next:** Fireworks AI LLM classifier running on AMD GPU for intent-based routing.
+Open [t.me/terrramonBot/terramon](https://t.me/terrramonBot/terramon) on your phone — no install, no login. Type a thought and summon your first creature in 3 seconds.
 
 ---
 
-## 🚀 Quick Start
+## 🧠 Architecture
+
+```
+player thought
+     ↓
+encode() → 512-dim hashing vector (L2-normalized)
+     ↓
+K3 MoE Insight Engine → 12 Jungian archetype experts + router → softmax probability distribution
+     ↓
+CreatureAgent born → stats (hunger/energy/happiness) + archetype + geo-anchor + THEREFORE
+     ↓
+DeepSeek V4 Flash (OpenRouter) generates unique in-character responses for every interaction
+     ↓
+Reflex TMA renders creature card + care panel + terra grid
+     ↓
+JsonMemory persists everything — survives redeploys
+```
+
+| Layer | Tech | What it does |
+|-------|------|-------------|
+| **Insight** | K3 MoE (12 Jungian experts) | Classifies thought into archetype + DRIVER/BARRIER/THEREFORE |
+| **Agent** | CreatureAgent + LLM behavior | Creature with stats, needs, evolution, LLM‑generated dialogue |
+| **Rarity** | Dirichlet‑multinomial distribution | Probabilistic rarity sampling (not binary keyword match) |
+| **Frontend** | Reflex 0.9.x + Telegram Mini App | Creature card, stat bars, interaction buttons, terra grid |
+| **AI** | DeepSeek V4 Flash via OpenRouter | Generates unique creature dialogue in character |
+| **Deploy** | Railway (auto‑deploy from GitHub) | Live at `t.me/terrramonBot/terramon` |
+
+---
+
+## 🎮 Try It
+
+### Fastest way: Telegram Mini App
+
+1. Open [t.me/terrramonBot/terramon](https://t.me/terrramonBot/terramon)
+2. Type `"I'm afraid of the interview tomorrow"`
+3. Tap **SUMMON** → your creature appears
+4. Feed it 🍽️, Play with it 🎮, Talk to it 💬
+5. Watch it grow. Eventually it **evolves**.
+
+### From source
 
 ```bash
-# 1. Clone
 git clone https://github.com/indrad3v4/Terramon.git
 cd Terramon
-
-# 2. Virtual environment
 python -m venv .venv && source .venv/bin/activate
-
-# 3. Install
 pip install -r requirements.txt
-
-# 4. Set your HF token (for Scout agent via HuggingFace Inference API)
-echo "HF_TOKEN=your_huggingface_token" > .env
-
-# 5. Summon!
-python cli.py "Scan the ridge for movement"
-# → 🔭 Ranger summoned — "Observation received. Scanning..."
-
-python cli.py "I feel lost tonight"
-# → 📜 Scout summoned — default agent handles the unknown
-```
-
-### What you'll see
-
-```
-🌱 Thought seed: Scan the ridge for movement
-🧙 Summoned agent: Ranger
-🕒 Timestamp: 2026-07-06T12:34:56
-💾 Memory saved to: data/thought_seeds.jsonl
-📡 Signal emitted: Ranger summoned at 2026-07-06T12:34:56
+python -m terramon.application.k3_insight_engine
 ```
 
 ---
 
-## 🧪 Project Status
+## 🧬 Key Techniques Applied
 
-```
-┌──────────┬────────────┬──────────┬───────────┬────────────┬─────────┐
-│  PRE-HACK│ 🏆 HACKATHON │   MVP    │   BETA    │   GROWTH   │  SCALE  │
-│  Jun 29  │  Jul 6-11   │ Jul-Sep  │ Oct-Dec   │ Jan-Mar 27 │ Apr-Jun │
-└──────────┴────────────┴──────────┴───────────┴────────────┴─────────┘
-                                    │
-                               🎂 Jul 29, 2027
-                            v1.0.0 · 1,000 MAU · €8k/mo MRR
-```
+Every module is a direct artifact from the [AI Engineering from Scratch](https://aiengineeringfromscratch.com/) curriculum (503 lessons, 20 phases):
 
-**Current Phase:** 🏃 Pre-Hackathon → 🏆 Hackathon
-
-### Hackathon Roadmap (Jul 6–11)
-
-| Day | Focus | Deliverable |
-|:---:|-------|-------------|
-| **D1** | World map UI + DID stub | Reflex map page, identity scaffold |
-| **D2** | SQLite adapter swap | Hexagonal architecture proven with real DB |
-| **D3** | Multi-agent world | 3+ agents, territory memory |
-| **D4** | Bitcoin Lightning payments | Micropayments for rare summons |
-| **D5** | On-chain thought seeds + polish | Containerised on AMD GPU |
-| **🏆** | **SUBMIT — Jul 11 18:00 CEST** | **Docker + pitch + video** |
-
-### Post-Hackathon (Jul 12 → Sep 30)
-
-- S1: Polish, bugfixes, v0.2.0
-- S2: Schell Lenses audit — Essential Experience, Fun, Curiosity, Flow
-- S3: Complete Codex — every creature has name, lore, personality, tools
-- S4: XP + Rarity system — creatures grow, rare ones by thought conditions
-- S5: Reflex UI v2 — mobile-first, map view, creature cards
-- S6: Fireworks AI classifier in prod — keyword → LLM intent routing
+| Lesson | Artifact | What it taught |
+|--------|----------|----------------|
+| 01–02 | `insight_engine.py` encode + W@x+b | Matrices as space‑warps |
+| 03 | `transforms.py` | Rotation, scale, shear = layer operations |
+| 04 | `trainer.py` → `k3_insight_engine.train_k3()` | Gradient descent, loss landscapes |
+| 05 | `autograd.py` | From‑scratch autograd (Value class) |
+| 06 | `rarity.py`, temperature‑scaled softmax | Probability distributions, Dirichlet, logistic |
+| 07 | `k3_insight_engine.py` MoE | 10 transferable techniques from Kimi K3 (AdamW, dropout, label smoothing…) |
+| 14 | `creature_agent.py` + `llm_behavior.py` | Agent loops, LLM function calling |
 
 ---
 
-## 🏗️ How It's Built
-
-| Stack | What For |
-|-------|----------|
-| **Python 3.13** | Core engine |
-| **Reflex** | Web frontend (coming in hackathon phase) |
-| **Fireworks AI** | LLM intent classifier on AMD GPU |
-| **AMD Developer Cloud** | ROCm-powered inference |
-| **HuggingFace Inference API** | Scout agent runtime (current) |
-| **Bitcoin Lightning** | Micropayments (planned Day 4) |
-| **SQLite** | Persistent memory (planned Day 2) |
-| **Docker** | Containerised submission |
-
----
-
-## 📁 Repo Structure
+## 📊 Project Status
 
 ```
-Terramon/
-├── cli.py                    # CLI entry point
-├── main.py                   # Scout agent demo (HuggingFace)
-├── terramon/
-│   ├── domain/               # Pure data — ThoughtSeed, etc.
-│   ├── ports/                # Protocols — ClassifierPort, MemoryPort
-│   ├── adapters/             # Implementations — KeywordClassifier, JsonMemory
-│   ├── application/          # Use cases — IntentRouter, SummonService
-│   └── events/               # EventBus + typed events
-├── tests/                    # Pytest suite
-├── tools/                    # Utilities (time_tool)
-├── ROADMAP_2027.md           # 12-month plan, 26 sprints
-├── STARTUP_VISION.md         # Pitch deck (10 slides)
-└── STRATEGY_6_THOUGHT_EXORCIST.md  # ✅ Chosen strategy
+▸ Phase: Live TMA · 68 tests · Railway auto-deploy
+▸ Current build: 24 Jungian archetypes → K3 MoE → LLM creature behavior
+▸ Next: Bayes' theorem for belief updating (creature learns from player feedback)
 ```
 
 ---
 
-## 📄 Key Documents
+## 🏛️ Repo Structure
 
-| File | What's Inside |
-|------|---------------|
-| `ROADMAP_2027.md` | 12-month Agile roadmap, 26 sprints, Phase 0–6 |
-| `STARTUP_VISION.md` | Pitch deck — problem, solution, TAM, business model |
-| `STRATEGY_6_THOUGHT_EXORCIST.md` | ✅ **Chosen strategy** — "Freedom from thoughts" |
-| `LEARNING_PATH.md` | Developer learning journey through the codebase |
-| `harmonogram_v2.csv` | 34-day sprint plan to Jul 29 |
+```
+terramon/
+├── domain/                # Pure data — Insight, CreatureAgent, ThoughtSeed, rarity, progress
+│   ├── insight.py         # DRIVER/BARRIER/THEREFORE + GeoContext
+│   ├── creature_agent.py  # Stats, evolution, Jungian verbs/sounds/feelings
+│   └── rarity.py          # Dirichlet distribution rarity
+├── application/           # Core engine
+│   ├── insight_engine.py  # Public API (delegates to K3)
+│   ├── k3_insight_engine.py # K3 MoE with 12 Jungian archetypes
+│   ├── autograd.py        # From‑scratch autograd (Value class)
+│   ├── llm_behavior.py    # DeepSeek V4 Flash creature dialogue
+│   ├── agent_service.py   # Creature interaction service
+│   └── summon_service.py  # Summon loop
+├── adapters/
+│   ├── embedding_classifier.py  # 12 Jungian archetypes in 512‑dim space
+│   ├── keyword_classifier.py    # 7 Jungian keyword map
+│   └── json_memory.py           # Persistence (v3: Insight + geo fields)
+├── ports/                 # Service protocols
+└── terramon_tma/          # Reflex frontend
+    └── terramon_tma.py    # GameBoy‑style single‑screen TMA
+```
 
 ---
 
-## 🤝 How to Contribute
+## 🤝 Contribute
 
-1. **⭐ Star the repo** — it fuels the fire
-2. **🐛 Open an Issue** — bugs, ideas, features
-3. **🍴 Fork it** — build your own world with your own creatures
-4. **💬 Join the conversation** — [Discord](https://discord.gg/lablabai)
+- **⭐ Star the repo** — signals matter
+- **🐛 Open an Issue** — bugs, ideas, features
+- **💬 Join** — Telegram [@terrramonBot](https://t.me/terrramonBot/terramon) (play first, then contribute)
 
-### PR Workflow
 ```bash
-# Run tests first
+# Run tests before any PR
 python -m pytest tests/
-
-# Open a PR and tag for review
-# Human review required before merge
 ```
 
 ---
 
-## 🎯 The Long Game
+> *"7 billion people. Billions of thoughts a day. Each one becomes a creature somewhere on this planet."*
 
-| Milestone | Target | Date |
-|-----------|--------|------|
-| 🏆 Hackathon submission | Working prototype on AMD GPU | Jul 11 |
-| 🧠 MVP release | Full summon loop + Reflex UI | Sep 30 |
-| 🌿 Open Beta | Community launch, Discord | Dec 31 |
-| 💛 Revenue | €2k/mo MRR | Mar 31, 2027 |
-| 🚀 Scale | 1,000 MAU | Jun 30, 2027 |
-| 🎂 **v1.0.0 + €8k/mo** | **Point B — 34 years old** | **Jul 29, 2027** |
-
----
-
-> *"The world is not waiting to be saved. It is waiting to be observed."*
-
-**Built with 💜 by indradev_ — AI Systems Architect**
-
-*Terramon — "Like a meteorite, we don't arrive quietly." 🌠*
+**Built with DeepSeek V4 Flash, Reflex, and Jungian psychology by indradev_ — AI Systems Architect**
