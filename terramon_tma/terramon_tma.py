@@ -637,11 +637,12 @@ def creature_care_panel() -> rx.Component:
                     ),
                     spacing="2",
                 ),
-                # Stat bars (inlined to avoid Var compile-time eval)
+                # Stat bars — bound to state vars (WAS hardcoded 50% — Lens #55 roast)
                 rx.text("🍽️ Hunger", font_size="0.7em", color="#9ca3af"),
                 rx.box(
                     rx.box(
-                        style={"width": "50%", "height": "100%",
+                        style={"width": TerramonState.agent_hunger.to_string() + "%",
+                               "height": "100%",
                                "background": "linear-gradient(90deg, #f59e0b, #f59e0bdd)",
                                "border_radius": "999px",
                                "transition": "width 0.3s ease"},
@@ -652,7 +653,8 @@ def creature_care_panel() -> rx.Component:
                 rx.text("⚡ Energy", font_size="0.7em", color="#9ca3af"),
                 rx.box(
                     rx.box(
-                        style={"width": "50%", "height": "100%",
+                        style={"width": TerramonState.agent_energy.to_string() + "%",
+                               "height": "100%",
                                "background": "linear-gradient(90deg, #22c55e, #22c55edd)",
                                "border_radius": "999px",
                                "transition": "width 0.3s ease"},
@@ -663,7 +665,8 @@ def creature_care_panel() -> rx.Component:
                 rx.text("❤️ Happiness", font_size="0.7em", color="#9ca3af"),
                 rx.box(
                     rx.box(
-                        style={"width": "50%", "height": "100%",
+                        style={"width": TerramonState.agent_happiness.to_string() + "%",
+                               "height": "100%",
                                "background": "linear-gradient(90deg, #ef4444, #ef4444dd)",
                                "border_radius": "999px",
                                "transition": "width 0.3s ease"},
