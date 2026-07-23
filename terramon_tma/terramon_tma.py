@@ -163,6 +163,9 @@ class TerramonState(rx.State):
     # The player's terra: every creature that ever lived (persisted).
     terra: list[dict] = []
 
+    # Bottom navigation tab: "" = none, "terra", "care", "map"
+    active_tab: str = ""
+
     @rx.var
     def xp_into_level(self) -> int:
         """XP progress within the current level (0-100) for the XP bar."""
@@ -251,6 +254,11 @@ class TerramonState(rx.State):
     def capture(self):
         """Open the photo-entry path (simulated in this MVP)."""
         self.photo_mode = True
+
+    @rx.event
+    def set_tab(self, tab: str):
+        """Toggle bottom nav tab: clicking active tab closes it."""
+        self.active_tab = tab if self.active_tab != tab else ""
 
     # ── Tamagotchi×Pokemon interaction handlers ───────────
 
@@ -919,26 +927,72 @@ def index() -> rx.Component:
                                   rx.text("Terra", font_size="0.7em"),
                                   spacing="1"),
                         variant="soft", size="2", width="30%",
-                        color_scheme="gray", disabled=True,
+                        color_scheme=rx.cond(
+                            TerramonState.active_tab == "terra", "amber", "gray",
+                        ),
+                        on_click=TerramonState.set_tab("terra"),
                     ),
                     rx.button(
                         rx.hstack(rx.text("🎮", font_size="1em"),
                                   rx.text("Care", font_size="0.7em"),
                                   spacing="1"),
                         variant="soft", size="2", width="30%",
-                        color_scheme="gray", disabled=True,
+                        color_scheme=rx.cond(
+                            TerramonState.active_tab == "care", "amber", "gray",
+                        ),
+                        on_click=TerramonState.set_tab("care"),
                     ),
                     rx.button(
                         rx.hstack(rx.text("🗺️", font_size="1em"),
                                   rx.text("Map", font_size="0.7em"),
                                   spacing="1"),
                         variant="soft", size="2", width="30%",
-                        color_scheme="gray", disabled=True,
+                        color_scheme=rx.cond(
+                            TerramonState.active_tab == "map", "amber", "gray",
+                        ),
+                        on_click=TerramonState.set_tab("map"),
                     ),
                     spacing="3",
                     width="100%",
                     max_width="360px",
                     padding="0.4em 0",
+                ),
+
+                # ── ZONE 5: Tab content (scrollable, GameBoy single-screen) ──
+                rx.cond(
+                    TerramonState.active_tab != "",
+                    rx.box(
+                        rx.cond(
+                            TerramonState.active_tab == "terra",
+                            rx.box(
+                                rx.grid(
+                                    rx.foreach(TerramonState.terra, terra_card),
+                                    columns="2",
+                                    spacing="2",
+                                    width="100%",
+                                ),
+                                width="100%",
+                                max_width="380px",
+                                style={"overflow_y": "auto", "max_height": "30vh"},
+                            ),
+                            rx.cond(
+                                TerramonState.active_tab == "care",
+                                creature_care_panel(),
+                                rx.cond(
+                                    TerramonState.active_tab == "map",
+                                    rx.box(
+                                        rx.text("🗺️ Map mode — coming soon",
+                                                color="#9ca3af", font_size="0.85em"),
+                                        text_align="center",
+                                        padding="1em",
+                                    ),
+                                    rx.fragment(),
+                                ),
+                            ),
+                        ),
+                        width="100%",
+                    ),
+                    rx.fragment(),
                 ),
 
                 # Goal celebration (compact)
