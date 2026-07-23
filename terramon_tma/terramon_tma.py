@@ -656,153 +656,314 @@ def creature_care_panel() -> rx.Component:
     )
 
 
-def index() -> rx.Component:
-    """Single-screen TMA: input -> summon -> card + terra grid."""
-    return rx.center(
-        rx.vstack(
-            rx.heading("🌍 TERRAMON", size="8", color="#f5f5f5"),
-            rx.text("Type a thought. Meet the creature it becomes.", color="#9ca3af"),
-
-            # SIN 5: two-tier buttons
-            rx.input(
-                placeholder=rx.cond(
-                    TerramonState.photo_mode,
-                    "caption this moment — what did you see, and feel?",
-                    "i'm afraid of the interview tomorrow...",
-                ),
-                value=TerramonState.thought,
-                on_change=TerramonState.set_thought,
-                width="100%",
-                max_width="380px",
-                size="3",
-            ),
-            rx.hstack(
-                # CAPTURE = secondary (outline)
-                rx.button(
-                    "📷 CAPTURE",
-                    on_click=TerramonState.capture,
-                    size="3",
-                    width="100%",
-                    variant="surface",
-                    color_scheme="gray",
-                ),
-                # SUMMON = primary (solid amber)
-                rx.button(
-                    rx.cond(
-                        TerramonState.summoning,
-                        "🔮 summoning...",
-                        "✨ SUMMON",
-                    ),
-                    on_click=TerramonState.summon,
-                    size="3",
-                    width="100%",
-                    variant="solid",
-                    color_scheme="amber",
-                    # SIN 1: interactive feel
-                    _hover={"transform": "scale(1.03)", "opacity": "0.95"},
-                    style={"transition": "all 0.15s ease"},
-                ),
-                spacing="3",
-                width="100%",
-                max_width="380px",
-            ),
-
-            # SIN 12: first-time guidance (shown only when empty)
-            rx.cond(
-                TerramonState.terra.length() == 0,
+def demo_creature() -> rx.Component:
+    """Animated shadow-creature waiting for first input — breathing, floating, pulsing."""
+    # CSS keyframes for the creature animations
+    breathe = rx.keyframes(
+        {
+            "0%": {"transform": "scale(1) translateY(0)", "opacity": "0.55"},
+            "50%": {"transform": "scale(1.04) translateY(-4px)", "opacity": "0.75"},
+            "100%": {"transform": "scale(1) translateY(0)", "opacity": "0.55"},
+        }
+    )
+    pulse_glow = rx.keyframes(
+        {
+            "0%": {"box_shadow": "0 0 20px rgba(212, 180, 254, 0.10)"},
+            "50%": {"box_shadow": "0 0 40px rgba(212, 180, 254, 0.25)"},
+            "100%": {"box_shadow": "0 0 20px rgba(212, 180, 254, 0.10)"},
+        }
+    )
+    blink = rx.keyframes(
+        {
+            "0%, 45%, 55%, 100%": {"opacity": "1"},
+            "50%": {"opacity": "0.15"},
+        }
+    )
+    return rx.vstack(
+        # The shadow creature — amorphous blob shape with breathing animation
+        rx.box(
+            rx.box(
+                # Creature body: stacked circles forming an ethereal shadow shape
                 rx.vstack(
+                    # Glowing eyes
+                    rx.hstack(
+                        rx.box(
+                            width="12px", height="14px",
+                            border_radius="50%",
+                            background="radial-gradient(circle, #d8b4fe 30%, #a78bfa88)",
+                            box_shadow="0 0 12px #a78bfa",
+                            style={"animation": f"{blink} 3.5s ease-in-out infinite"},
+                        ),
+                        rx.box(
+                            width="6px", height="6px",
+                        ),
+                        rx.box(
+                            width="12px", height="14px",
+                            border_radius="50%",
+                            background="radial-gradient(circle, #d8b4fe 30%, #a78bfa88)",
+                            box_shadow="0 0 12px #a78bfa",
+                            style={"animation": f"{blink} 3.5s ease-in-out infinite",
+                                   "animation_delay": "0.15s"},
+                        ),
+                        spacing="3",
+                        align="center",
+                        justify="center",
+                    ),
                     rx.text(
-                        "Write how you feel. The creature becomes.",
+                        "✦",
+                        font_size="1.6em",
                         color="#d8b4fe",
-                        font_size="0.85em",
-                        text_align="center",
-                        max_width="320px",
+                        letter_spacing="0.3em",
                     ),
-                    rx.text(
-                        "Tip: a photo works too. Capture a moment, "
-                        "meet what it becomes.",
-                        color="#9ca3af",
-                        font_size="0.8em",
-                        text_align="center",
-                        max_width="320px",
-                    ),
-                    spacing="1",
-                    align="center",
-                    padding="0.5em",
-                ),
-                rx.fragment(),
-            ),
-
-            progress_header(),
-            rx.cond(TerramonState.has_summoned, creature_card(), rx.fragment()),
-            # Tamagotchi×Pokemon: creature care panel
-            creature_care_panel(),
-
-            # MAP MODE stub
-            rx.tooltip(
-                rx.button(
-                    "🗺️ MAP MODE",
-                    disabled=True,
-                    width="100%",
-                    max_width="380px",
-                    variant="soft",
-                    color_scheme="amber",
-                ),
-                content="Unlock at Tamer",
-            ),
-
-            rx.divider(),
-            rx.heading("🜨 YOUR TERRA", size="5", color="#a78bfa"),
-            rx.text(TerramonState.distinct.to_string() + " creatures live here",
-                    color="#a78bfa", font_size="0.85em"),
-
-            rx.cond(
-                TerramonState.terra.length() > 0,
-                rx.grid(
-                    rx.foreach(TerramonState.terra, terra_card),
-                    columns="2",
                     spacing="3",
-                    width="100%",
-                    max_width="380px",
+                    align="center",
                 ),
-                # v2: Terra = real planet Earth
-                rx.vstack(
-                    rx.text("🌍", color="#c4b5fd", font_size="1.8em"),
-                    rx.text(
-                        "7 billion people. Billions of thoughts a day. "
-                        "Each one becomes a creature somewhere on this planet.",
-                        color="#c4b5fd",
-                        font_size="0.9em",
-                        text_align="center",
-                        max_width="320px",
+                # Shadow-body wrapper
+                width="120px", height="110px",
+                border_radius="50% 50% 45% 45%",
+                background="radial-gradient(ellipse at 50% 40%, #2a2a3a 20%, #1a1a28 60%, transparent 80%)",
+                style={"animation": f"{breathe} 3s ease-in-out infinite"},
+                display="flex",
+                align_items="center",
+                justify_content="center",
+            ),
+            # Glow aura around creature
+            style={"animation": f"{pulse_glow} 3s ease-in-out infinite"},
+            display="flex",
+            align_items="center",
+            justify_content="center",
+            padding="0.5em",
+        ),
+        # Title
+        rx.text(
+            "Something stirs in the void...",
+            color="#d8b4fe",
+            font_size="0.95em",
+            font_weight="bold",
+            text_align="center",
+            font_style="italic",
+            max_width="320px",
+        ),
+        # Subtitle
+        rx.text(
+            "Type a thought. Meet what emerges.",
+            color="#9ca3af",
+            font_size="0.8em",
+            text_align="center",
+            max_width="320px",
+        ),
+        # Gentle tip
+        rx.text(
+            "Every thought becomes a creature. "
+            "What's on your mind right now?",
+            color="#6b7280",
+            font_size="0.7em",
+            text_align="center",
+            font_style="italic",
+            max_width="280px",
+        ),
+        spacing="2",
+        align="center",
+        padding="1.5em 0",
+    )
+
+
+def index() -> rx.Component:
+    """GameBoy-style single-screen TMA. Everything visible at once, no scrolling.
+    Three zones: TOP (creature), MIDDLE (stats+input), BOTTOM (nav).
+    Like Pokémon Gold — all on one iPhone screen."""
+    return rx.center(
+        # Outer container: fixed height = 100vh, no overflow
+        rx.box(
+            rx.vstack(
+                # ── ZONE 0: Mini header bar ──
+                rx.hstack(
+                    rx.heading("🌍 TERRAMON", size="5", color="#f5f5f5"),
+                    rx.spacer(),
+                    rx.hstack(
+                        rx.text("Lv.", color="#9ca3af", font_size="0.7em"),
+                        rx.text(TerramonState.level.to_string(), color="#f59e0b",
+                                font_weight="bold", font_size="0.85em"),
+                        rx.cond(
+                            TerramonState.distinct > 0,
+                            rx.text(TerramonState.distinct.to_string() + "/" +
+                                    TerramonState.goal.to_string(),
+                                    color="#a78bfa", font_size="0.7em"),
+                            rx.fragment(),
+                        ),
+                        spacing="1",
                     ),
-                    rx.text(
-                        "The world is the game map. "
-                        "Capture a moment — meet the creature it becomes.",
-                        color="#9ca3af",
-                        font_size="0.8em",
-                        text_align="center",
-                        max_width="320px",
-                        font_style="italic",
+                    width="100%",
+                    padding="0.4em 0.2em",
+                ),
+
+                # ── ZONE 1: Creature display (~35% viewport) ──
+                rx.box(
+                    rx.cond(
+                        TerramonState.has_summoned,
+                        # Compact creature card
+                        rx.vstack(
+                            rx.text(TerramonState.sigil, font_size="2.8em",
+                                    color=TerramonState.color,
+                                    text_shadow=TerramonState.rarity_glow_style),
+                            rx.text(TerramonState.agent, color=TerramonState.color,
+                                    font_weight="bold", font_size="1em"),
+                            rx.text('"' + TerramonState.thought[:40] + '"',
+                                    color="#e5e7eb", font_style="italic",
+                                    font_size="0.7em", text_align="center",
+                                    max_width="260px"),
+                            spacing="1",
+                            align="center",
+                        ),
+                        # Empty state: compact shadow creature
+                        rx.vstack(
+                            rx.box(
+                                rx.hstack(
+                                    rx.box(width="8px", height="10px",
+                                           border_radius="50%",
+                                           background="radial-gradient(circle, #d8b4fe 30%, #a78bfa88)",
+                                           box_shadow="0 0 8px #a78bfa"),
+                                    rx.box(width="4px"),
+                                    rx.box(width="8px", height="10px",
+                                           border_radius="50%",
+                                           background="radial-gradient(circle, #d8b4fe 30%, #a78bfa88)",
+                                           box_shadow="0 0 8px #a78bfa"),
+                                    spacing="2",
+                                    align="center",
+                                ),
+                                padding="0.3em",
+                                display="flex",
+                                align_items="center",
+                                justify_content="center",
+                            ),
+                            rx.text("Type a thought. Meet what emerges.",
+                                    color="#9ca3af", font_size="0.7em",
+                                    font_style="italic"),
+                            spacing="1",
+                            align="center",
+                        ),
+                    ),
+                    height="35vh",
+                    min_height="160px",
+                    display="flex",
+                    align_items="center",
+                    justify_content="center",
+                    width="100%",
+                ),
+
+                # ── ZONE 2: Compact stats + XP bar ──
+                rx.box(
+                    rx.hstack(
+                        rx.text("XP", color="#6b7280", font_size="0.6em"),
+                        rx.box(
+                            rx.box(
+                                style={"width": TerramonState.xp_into_level.to_string() + "%",
+                                      "height": "100%",
+                                      "background": "linear-gradient(90deg, #f59e0b, #d97706)",
+                                      "border_radius": "999px",
+                                      "transition": "width 0.4s ease"},
+                            ),
+                            width="100%", height="6px",
+                            background="#27272a", border_radius="999px",
+                            overflow="hidden",
+                            flex="1",
+                        ),
+                        rx.text(TerramonState.xp.to_string() + "/100",
+                                color="#6b7280", font_size="0.6em"),
+                        spacing="2",
+                        align="center",
+                        width="100%",
+                    ),
+                    width="100%",
+                    max_width="360px",
+                ),
+
+                # ── ZONE 3: Input + Action buttons ──
+                rx.vstack(
+                    rx.input(
+                        placeholder=rx.cond(
+                            TerramonState.photo_mode,
+                            "caption this moment...",
+                            "i'm afraid of the interview...",
+                        ),
+                        value=TerramonState.thought,
+                        on_change=TerramonState.set_thought,
+                        width="100%",
+                        size="2",
+                        variant="soft",
+                        color_schema="gray",
+                    ),
+                    rx.hstack(
+                        rx.button("📷", on_click=TerramonState.capture,
+                                  size="2", variant="surface", width="30%",
+                                  color_scheme="gray"),
+                        rx.button(
+                            rx.cond(TerramonState.summoning, "🔮", "✨ SUMMON"),
+                            on_click=TerramonState.summon,
+                            size="2", width="68%",
+                            variant="solid", color_scheme="amber",
+                            _hover={"transform": "scale(1.02)"},
+                        ),
+                        spacing="2",
+                        width="100%",
                     ),
                     spacing="2",
-                    align="center",
-                    padding="1em",
-                    border="1px dashed #27272a",
-                    border_radius="12px",
                     width="100%",
-                    max_width="380px",
+                    max_width="360px",
                 ),
-            ),
 
-            spacing="4",
-            align="center",
-            padding="2em 1em",
+                # ── ZONE 4: GameBoy-style bottom navigation ──
+                rx.hstack(
+                    rx.button(
+                        rx.hstack(rx.text("🜨", font_size="1em"),
+                                  rx.text("Terra", font_size="0.7em"),
+                                  spacing="1"),
+                        variant="soft", size="2", width="30%",
+                        color_scheme="gray", disabled=True,
+                    ),
+                    rx.button(
+                        rx.hstack(rx.text("🎮", font_size="1em"),
+                                  rx.text("Care", font_size="0.7em"),
+                                  spacing="1"),
+                        variant="soft", size="2", width="30%",
+                        color_scheme="gray", disabled=True,
+                    ),
+                    rx.button(
+                        rx.hstack(rx.text("🗺️", font_size="1em"),
+                                  rx.text("Map", font_size="0.7em"),
+                                  spacing="1"),
+                        variant="soft", size="2", width="30%",
+                        color_scheme="gray", disabled=True,
+                    ),
+                    spacing="3",
+                    width="100%",
+                    max_width="360px",
+                    padding="0.4em 0",
+                ),
+
+                # Goal celebration (compact)
+                rx.cond(
+                    TerramonState.goal_reached,
+                    rx.text("✦ GOAL REACHED! You are a Tamer ✦",
+                            color="#f59e0b", font_weight="bold",
+                            font_size="0.7em", text_align="center"),
+                    rx.fragment(),
+                ),
+
+                spacing="1",
+                align="center",
+                padding="0.5em 1em",
+                height="100vh",
+                width="100%",
+                max_width="400px",
+            ),
+            background="linear-gradient(180deg, #0b0b0f 0%, #101018 50%, #0b0b0f 100%)",
+            height="100vh",
+            width="100%",
+            style={"overflow": "hidden"},  # NO SCROLLING — GameBoy style
         ),
-        # SIN 2: background gradient + keyframes for fadeIn animation
-        background="linear-gradient(180deg, #0b0b0f 0%, #101018 50%, #0b0b0f 100%)",
-        min_height="100vh",
         width="100%",
+        height="100vh",
     )
 
 
