@@ -151,6 +151,17 @@ class TerramonState(rx.State):
     intelligence: int = 0
     photo_mode: bool = False
     summoning: bool = False  # animation flag (SIN 1 fix: loading state)
+    celebration_dismissed: bool = False  # F2: Tamer Unlock celebration dismissed
+
+    # B1: LLM-generated creature greeting on summon
+    creature_greeting: str = ""
+    # B3: last-seen tracking for memory greetings
+    last_seen: str = ""
+    memory_greeting: str = ""
+
+    # F3 — Monetization Gate: first summon free, then payment required
+    summon_count: int = 0
+    unlocked: bool = False  # becomes True after payment/unlock
 
     # Tamagotchi×Pokemon: creature agent interaction
     selected_agent_id: str = ""
@@ -212,6 +223,12 @@ class TerramonState(rx.State):
         if not text:
             return
 
+        # F3 — Monetization Gate: first summon free, then payment required
+        if self.summon_count > 0 and not self.unlocked:
+            # Show payment prompt instead of summoning
+            self.summoning = False
+            return
+
         # SIN 1: show loading state immediately
         self.summoning = True
 
@@ -230,6 +247,7 @@ class TerramonState(rx.State):
         self.goal = _LOOP.progress.goal_distinct
         self.goal_reached = result.goal_reached
         self.has_summoned = True
+        self.summon_count += 1  # F3: track free summon used
 
         seeds = _MEMORY.load_all_seeds()
         self.reflection = _reflect_on_memory(seeds, result.agent)
@@ -249,6 +267,37 @@ class TerramonState(rx.State):
         if seeds and seeds[-1].insight and seeds[-1].insight.geo:
             g = seeds[-1].insight.geo
             self.place = g.place_name or f"{g.lat:.2f}, {g.lon:.2f}"
+
+        # B1: Generate creature greeting via LLM (thought + archetype + geo context)
+        from terramon.application.llm_behavior import generate_response
+        _greeting_agent = CreatureAgent(
+            agent_id="summon-greet",
+            archetype=self.agent,
+            place_name=self.place,
+            level=self.level, xp=self.xp,
+        )
+        _greeting_msg = generate_response(_greeting_agent, "summon", text)
+        self.creature_greeting = _greeting_msg.text
+
+        # B3: Track last_seen and generate memory greeting based on elapsed time
+        import datetime
+        now_iso = datetime.datetime.now().isoformat()
+        if self.last_seen:
+            from datetime import datetime as _dt
+            _last = _dt.fromisoformat(self.last_seen)
+            _now = _dt.fromisoformat(now_iso)
+            _hours = (_now - _last).total_seconds() / 3600
+            if _hours < 1:
+                self.memory_greeting = "You were just here... the creature remembers your presence."
+            elif _hours < 6:
+                self.memory_greeting = f"{int(_hours)}h since you last visited. The creature held your thought close."
+            elif _hours < 24:
+                self.memory_greeting = "Almost a day... the creature wondered when you'd return."
+            else:
+                self.memory_greeting = f"{int(_hours)}h — the terra grew quiet without you."
+        else:
+            self.memory_greeting = "A new presence stirs. The creature sees you for the first time."
+        self.last_seen = now_iso
 
         # Init agent stats for Tamagotchi×Pokemon interaction
         self.agent_name = self.agent
@@ -352,6 +401,11 @@ class TerramonState(rx.State):
         """Close the first-time onboarding overlay."""
         self.show_tutorial = False
 
+    @rx.event
+    def dismiss_celebration(self):
+        """Dismiss the TERRA AWAKENED celebration overlay (F2)."""
+        self.celebration_dismissed = True
+
     # ── Tamagotchi×Pokemon interaction handlers ───────────
 
     def _init_agent_stats(self):
@@ -420,6 +474,13 @@ class TerramonState(rx.State):
         if not self.has_summoned or self.price_sats <= 0:
             return
         self.agent_message = f"⚡ Minting {self.agent} for {self.price_sats} Stars..."
+
+    @rx.event
+    def buy_me_coffee(self):
+        """F3 — Buy Me a Coffee / Unlock gate.
+        MVP: just sets unlocked=True so next summon works.
+        Real integration: redirect to Telegram Stars payment flow."""
+        self.unlocked = True
 
     @rx.event
     def share_creature(self):
@@ -585,11 +646,44 @@ def creature_card() -> rx.Component:
             rx.text(TerramonState.lore, font_size="0.9em", color="#9ca3af"),
             rx.text(TerramonState.reflection, font_size="0.8em", color="#a78bfa",
                     text_align="center", max_width="360px"),
+            # B1/F1.1: Speech bubble — creature's LLM-generated greeting
+            rx.cond(
+                TerramonState.creature_greeting != "",
+                rx.box(
+                    rx.text(TerramonState.creature_greeting, font_size="0.85em",
+                            color="#d8b4fe", font_style="italic", text_align="center"),
+                    padding="0.5em 1em",
+                    background="#1e1e2a",
+                    border_radius="12px",
+                    border="1px solid #27272a",
+                    width="100%",
+                    max_width="340px",
+                    # Tail for speech bubble effect
+                    _before={
+                        "content": "''",
+                        "position": "absolute",
+                        "top": "-8px",
+                        "left": "20px",
+                        "border": "8px solid transparent",
+                        "border_bottom_color": "#1e1e2a",
+                    },
+                    position="relative",
+                ),
+                rx.fragment(),
+            ),
             # FIX 2: INSIGHT line (the THEREFORE directive)
             rx.cond(
                 TerramonState.insight != "",
                 rx.text(TerramonState.insight, font_size="0.8em", color="#c4b5fd",
                         text_align="center", font_style="italic", max_width="360px"),
+                rx.fragment(),
+            ),
+            # B3/F1.3: Memory greeting based on last_seen
+            rx.cond(
+                TerramonState.memory_greeting != "",
+                rx.text(TerramonState.memory_greeting, font_size="0.7em",
+                        color="#a78bfa", text_align="center", font_style="italic",
+                        max_width="340px"),
                 rx.fragment(),
             ),
             rx.divider(),
@@ -1088,6 +1182,131 @@ def earth_map() -> rx.Component:
     )
 
 
+def payment_gate() -> rx.Component:
+    """F3 — Monetization Gate: Buy Me a Coffee + Unlock button.
+    Shown inline when free summon is used and payment hasn't been made."""
+    return rx.vstack(
+        rx.box(
+            rx.vstack(
+                rx.text("☕", font_size="1.5em"),
+                rx.text("Free summon used!",
+                        font_weight="bold", font_size="0.9em", color="#e5e7eb"),
+                rx.text("Support Terramon to unlock more summons.",
+                        font_size="0.75em", color="#9ca3af", text_align="center"),
+                spacing="1",
+                align="center",
+            ),
+            padding="1em",
+            background="#141418",
+            border="1px solid #27272a",
+            border_radius="12px",
+            width="100%",
+        ),
+        rx.hstack(
+            # Buy Me a Coffee link (opens in new tab)
+            rx.link(
+                rx.button(
+                    rx.hstack(
+                        rx.text("☕", font_size="1em"),
+                        rx.text("Buy me a coffee", font_size="0.8em"),
+                        spacing="1",
+                    ),
+                    variant="soft",
+                    size="2",
+                    color_scheme="amber",
+                    width="100%",
+                ),
+                href="https://buymeacoffee.com/terramon",
+                is_external=True,
+                width="48%",
+            ),
+            # MVP Unlock button — real integration would verify payment
+            rx.button(
+                rx.hstack(
+                    rx.text("🔓", font_size="1em"),
+                    rx.text("Unlock", font_size="0.8em"),
+                    spacing="1",
+                ),
+                on_click=TerramonState.buy_me_coffee,
+                variant="solid",
+                size="2",
+                color_scheme="amber",
+                width="48%",
+                _hover={"transform": "scale(1.02)"},
+            ),
+            spacing="2",
+            width="100%",
+        ),
+        rx.text(
+            "Real Telegram Stars payment coming soon. "
+            "For now, tap Unlock to continue.",
+            font_size="0.6em",
+            color="#6b7280",
+            text_align="center",
+            font_style="italic",
+        ),
+        spacing="2",
+        align="center",
+        width="100%",
+        max_width="360px",
+    )
+
+
+# ── F2: Tamer Unlock celebration (5/5 distinct → "Terra Awakened") ──
+_CELEBRATION_SPARKLE = rx.keyframes(
+    {
+        "0%": {"opacity": "0.3", "transform": "scale(1)"},
+        "50%": {"opacity": "1", "transform": "scale(1.05)"},
+        "100%": {"opacity": "0.3", "transform": "scale(1)"},
+    }
+)
+
+
+def celebration_component() -> rx.Component:
+    """Full-screen celebration overlay when player reaches 5/5 distinct creatures.
+    Shows 'TERRA AWAKENED' with golden border + sparkle animation.
+    Dismissable — after dismiss, permanent visual upgrades appear (F2)."""
+    return rx.box(
+        rx.vstack(
+            rx.box(height="12vh"),
+            rx.text("✦", color="#f59e0b", font_size="4em",
+                    style={"animation": f"{_CELEBRATION_SPARKLE} 1.5s ease-in-out infinite"}),
+            rx.heading("TERRA AWAKENED", size="7", color="#f59e0b",
+                       font_weight="bold", letter_spacing="0.08em",
+                       text_shadow="0 0 30px rgba(245,158,11,0.6)"),
+            rx.text("You have collected 5 distinct creatures.",
+                    color="#d8b4fe", font_size="0.85em", text_align="center"),
+            rx.text("Your terra is awake. All creatures now bear",
+                    color="#d8b4fe", font_size="0.85em", text_align="center"),
+            rx.text("the legendary ★ mark.",
+                    color="#d8b4fe", font_size="0.85em", text_align="center"),
+            rx.spacer(),
+            rx.button(
+                "✦ Continue",
+                on_click=TerramonState.dismiss_celebration,
+                color_scheme="amber", variant="solid", size="3",
+                width="200px",
+                _hover={"transform": "scale(1.05)"},
+                style={"transition": "all 0.2s ease"},
+            ),
+            spacing="4",
+            align="center",
+            padding="2em",
+            width="100%",
+            max_width="360px",
+        ),
+        position="fixed",
+        top="0", left="0", right="0", bottom="0",
+        background="rgba(11,11,15,0.92)",
+        display="flex",
+        align_items="center",
+        justify_content="center",
+        z_index="900",
+        border="2px solid #f59e0b66",
+        style={"animation": "fadeIn 0.5s ease"},
+    )
+
+
 def index() -> rx.Component:
     """GameBoy-style single-screen TMA. Everything visible at once, no scrolling.
     Three zones: TOP (creature), MIDDLE (stats+input), BOTTOM (nav).
@@ -1100,18 +1319,34 @@ def index() -> rx.Component:
             rx.vstack(
                 # ── ZONE 0: Mini header bar ──
                 rx.hstack(
-                    rx.heading("🌍 TERRAMON", size="5", color="#f5f5f5"),
+                    rx.hstack(
+                        rx.heading("🌍 TERRAMON", size="5", color="#f5f5f5"),
+                        rx.cond(
+                            TerramonState.goal_reached,
+                            rx.text("★", color="#f59e0b", font_size="1.2em",
+                                    text_shadow="0 0 12px rgba(245,158,11,0.6)"),
+                            rx.fragment(),
+                        ),
+                        spacing="1",
+                        align="center",
+                    ),
                     rx.spacer(),
                     rx.hstack(
                         rx.text("Lv.", color="#9ca3af", font_size="0.7em"),
                         rx.text(TerramonState.level.to_string(), color="#f59e0b",
                                 font_weight="bold", font_size="0.85em"),
                         rx.cond(
-                            TerramonState.distinct > 0,
-                            rx.text(TerramonState.distinct.to_string() + "/" +
-                                    TerramonState.goal.to_string(),
-                                    color="#a78bfa", font_size="0.7em"),
-                            rx.fragment(),
+                            TerramonState.goal_reached,
+                            rx.text("★ Tamer", color="#f59e0b",
+                                    font_weight="bold", font_size="0.7em",
+                                    text_shadow="0 0 8px rgba(245,158,11,0.4)"),
+                            rx.cond(
+                                TerramonState.distinct > 0,
+                                rx.text(TerramonState.distinct.to_string() + "/" +
+                                        TerramonState.goal.to_string(),
+                                        color="#a78bfa", font_size="0.7em"),
+                                rx.fragment(),
+                            ),
                         ),
                         spacing="1",
                     ),
@@ -1126,9 +1361,13 @@ def index() -> rx.Component:
                         # Compact creature card
                         rx.vstack(
                             rx.text(TerramonState.sigil, font_size="2.8em",
-                                    color=TerramonState.color,
-                                    text_shadow=TerramonState.rarity_glow_style),
-                            rx.text(TerramonState.agent, color=TerramonState.color,
+                                    color=rx.cond(TerramonState.goal_reached, "#f59e0b", TerramonState.color),
+                                    text_shadow=rx.cond(
+                                        TerramonState.goal_reached,
+                                        "0 0 40px rgba(245,158,11,0.6)",
+                                        TerramonState.rarity_glow_style,
+                                    )),
+                            rx.text(TerramonState.agent, color=rx.cond(TerramonState.goal_reached, "#f59e0b", TerramonState.color),
                                     font_weight="bold", font_size="1em"),
                             rx.text('"' + TerramonState.thought[:40] + '"',
                                     font_size="0.7em", text_align="center",
@@ -1137,6 +1376,44 @@ def index() -> rx.Component:
                             rx.text(TerramonState.lore, font_size="0.65em",
                                     color="#9ca3af", text_align="center",
                                     max_width="260px", font_style="italic"),
+                            # F1.1: Compact speech bubble
+                            rx.cond(
+                                TerramonState.creature_greeting != "",
+                                rx.box(
+                                    rx.text(TerramonState.creature_greeting,
+                                            font_size="0.6em", color="#d8b4fe",
+                                            font_style="italic", text_align="center"),
+                                    padding="0.3em 0.6em",
+                                    background="#1e1e2a",
+                                    border_radius="8px",
+                                    border="1px solid #27272a",
+                                    width="100%",
+                                    max_width="260px",
+                                    position="relative",
+                                ),
+                                rx.fragment(),
+                            ),
+                            # F1.2: Geo location on compact card
+                            rx.cond(
+                                TerramonState.place != "",
+                                rx.hstack(
+                                    rx.text("📍", font_size="0.6em"),
+                                    rx.text(TerramonState.place, font_size="0.55em",
+                                            color="#6b7280", font_style="italic"),
+                                    spacing="1",
+                                    align="center",
+                                ),
+                                rx.fragment(),
+                            ),
+                            # F1.3: Memory greeting (compact)
+                            rx.cond(
+                                TerramonState.memory_greeting != "",
+                                rx.text(TerramonState.memory_greeting,
+                                        font_size="0.55em", color="#a78bfa",
+                                        text_align="center", font_style="italic",
+                                        max_width="260px"),
+                                rx.fragment(),
+                            ),
                             spacing="1",
                             align="center",
                         ),
@@ -1195,6 +1472,21 @@ def index() -> rx.Component:
                         ),
                         rx.text(TerramonState.xp.to_string() + "/100",
                                 color="#6b7280", font_size="0.6em"),
+                        rx.cond(
+                            TerramonState.goal_reached,
+                            rx.hstack(
+                                rx.text("★", color="#f59e0b", font_size="0.8em"),
+                                rx.text("Tamer", color="#f59e0b", font_size="0.6em",
+                                        font_weight="bold"),
+                                spacing="1",
+                                align="center",
+                                border="1px solid #f59e0b44",
+                                border_radius="999px",
+                                padding="0.1em 0.4em",
+                                background="rgba(245,158,11,0.08)",
+                            ),
+                            rx.fragment(),
+                        ),
                         spacing="2",
                         align="center",
                         width="100%",
@@ -1203,38 +1495,44 @@ def index() -> rx.Component:
                     max_width="360px",
                 ),
 
-                # ── ZONE 3: Input + Action buttons ──
-                rx.vstack(
-                    rx.input(
-                        placeholder=rx.cond(
-                            TerramonState.photo_mode,
-                            "caption this moment...",
-                            "i'm afraid of the interview...",
+                # ── ZONE 3: Input + Action buttons (or F3 payment gate) ──
+                rx.cond(
+                    # F3 — show payment gate after free summon used
+                    TerramonState.summon_count > 0 & ~TerramonState.unlocked,
+                    payment_gate(),
+                    # Normal input + action buttons
+                    rx.vstack(
+                        rx.input(
+                            placeholder=rx.cond(
+                                TerramonState.photo_mode,
+                                "caption this moment...",
+                                "i'm afraid of the interview...",
+                            ),
+                            value=TerramonState.thought,
+                            on_change=TerramonState.set_thought,
+                            width="100%",
+                            size="2",
+                            variant="soft",
+                            color_schema="gray",
                         ),
-                        value=TerramonState.thought,
-                        on_change=TerramonState.set_thought,
-                        width="100%",
-                        size="2",
-                        variant="soft",
-                        color_schema="gray",
-                    ),
-                    rx.hstack(
-                        rx.button("📷", on_click=TerramonState.capture,
-                                  size="2", variant="surface", width="30%",
-                                  color_scheme="gray"),
-                        rx.button(
-                            rx.cond(TerramonState.summoning, "🔮", "✨ SUMMON"),
-                            on_click=TerramonState.summon,
-                            size="2", width="68%",
-                            variant="solid", color_scheme="amber",
-                            _hover={"transform": "scale(1.02)"},
+                        rx.hstack(
+                            rx.button("📷", on_click=TerramonState.capture,
+                                      size="2", variant="surface", width="30%",
+                                      color_scheme="gray"),
+                            rx.button(
+                                rx.cond(TerramonState.summoning, "🔮", "✨ SUMMON"),
+                                on_click=TerramonState.summon,
+                                size="2", width="68%",
+                                variant="solid", color_scheme="amber",
+                                _hover={"transform": "scale(1.02)"},
+                            ),
+                            spacing="2",
+                            width="100%",
                         ),
                         spacing="2",
                         width="100%",
+                        max_width="360px",
                     ),
-                    spacing="2",
-                    width="100%",
-                    max_width="360px",
                 ),
 
                 # ── ZONE 4: GameBoy-style bottom navigation ──
@@ -1275,6 +1573,17 @@ def index() -> rx.Component:
                     padding="0.4em 0",
                 ),
 
+                # ── F2: Tamer Unlock celebration overlay ──
+                rx.cond(
+                    TerramonState.goal_reached,
+                    rx.cond(
+                        TerramonState.celebration_dismissed,
+                        rx.fragment(),
+                        celebration_component(),
+                    ),
+                    rx.fragment(),
+                ),
+
                 # ── ZONE 5: Tab content (scrollable, GameBoy single-screen) ──
                 rx.cond(
                     TerramonState.active_tab != "",
@@ -1304,15 +1613,6 @@ def index() -> rx.Component:
                         ),
                         width="100%",
                     ),
-                    rx.fragment(),
-                ),
-
-                # Goal celebration (compact)
-                rx.cond(
-                    TerramonState.goal_reached,
-                    rx.text("✦ GOAL REACHED! You are a Tamer ✦",
-                            color="#f59e0b", font_weight="bold",
-                            font_size="0.7em", text_align="center"),
                     rx.fragment(),
                 ),
 
