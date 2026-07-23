@@ -173,6 +173,9 @@ class TerramonState(rx.State):
     # Bottom navigation tab: "" = none, "terra", "care", "map"
     active_tab: str = ""
 
+    # Onboarding tutorial (shown once per first visit)
+    show_tutorial: bool = True
+
     @rx.var
     def xp_into_level(self) -> int:
         """XP progress within the current level (0-100) for the XP bar."""
@@ -300,6 +303,11 @@ class TerramonState(rx.State):
     def set_tab(self, tab: str):
         """Toggle bottom nav tab: clicking active tab closes it."""
         self.active_tab = tab if self.active_tab != tab else ""
+
+    @rx.event
+    def dismiss_tutorial(self):
+        """Close the first-time onboarding overlay."""
+        self.show_tutorial = False
 
     # ── Tamagotchi×Pokemon interaction handlers ───────────
 
@@ -846,11 +854,121 @@ def demo_creature() -> rx.Component:
     )
 
 
+def tutorial_overlay() -> rx.Component:
+    """First-time onboarding overlay — explains how to play."""
+    return rx.cond(
+        TerramonState.show_tutorial,
+        rx.box(
+            rx.vstack(
+                rx.text("🌍 Welcome to Terramon", font_size="1.2em",
+                        color="#f5f5f5", font_weight="bold"),
+                rx.text("Your thoughts become creatures on real planet Earth.",
+                        font_size="0.8em", color="#9ca3af", text_align="center"),
+                rx.hstack(
+                    rx.box(rx.text("✍️", font_size="1.5em"), width="2em"),
+                    rx.vstack(
+                        rx.text("1. Type a thought", font_weight="bold",
+                                font_size="0.8em", color="#e5e7eb"),
+                        rx.text("Anything on your mind becomes a creature.",
+                                font_size="0.7em", color="#6b7280"),
+                        spacing="1",
+                    ),
+                    spacing="2",
+                    width="100%",
+                ),
+                rx.hstack(
+                    rx.box(rx.text("🃏", font_size="1.5em"), width="2em"),
+                    rx.vstack(
+                        rx.text("2. SUMMON it", font_weight="bold",
+                                font_size="0.8em", color="#e5e7eb"),
+                        rx.text("Your creature appears with personality + stats.",
+                                font_size="0.7em", color="#6b7280"),
+                        spacing="1",
+                    ),
+                    spacing="2",
+                    width="100%",
+                ),
+                rx.hstack(
+                    rx.box(rx.text("🍽️", font_size="1.5em"), width="2em"),
+                    rx.vstack(
+                        rx.text("3. Feed, Play, Talk, Rest", font_weight="bold",
+                                font_size="0.8em", color="#e5e7eb"),
+                        rx.text("Keep it alive. It remembers you.",
+                                font_size="0.7em", color="#6b7280"),
+                        spacing="1",
+                    ),
+                    spacing="2",
+                    width="100%",
+                ),
+                rx.hstack(
+                    rx.box(rx.text("✦", font_size="1.5em"), width="2em"),
+                    rx.vstack(
+                        rx.text("4. Evolve", font_weight="bold",
+                                font_size="0.8em", color="#f59e0b"),
+                        rx.text("Level up. Transform. Grow together.",
+                                font_size="0.7em", color="#6b7280"),
+                        spacing="1",
+                    ),
+                    spacing="2",
+                    width="100%",
+                ),
+                rx.button("Got it!", on_click=TerramonState.dismiss_tutorial,
+                          color_scheme="amber", variant="soft", size="2",
+                          width="100%", margin_top="0.5em"),
+                spacing="3",
+                padding="2em",
+                background="linear-gradient(145deg, #1a1a2e 0%, #141418 100%)",
+                border="1px solid #27272a",
+                border_radius="20px",
+                max_width="340px",
+                width="100%",
+            ),
+            position="fixed",
+            top="0", left="0", right="0", bottom="0",
+            background="rgba(0,0,0,0.75)",
+            display="flex",
+            align_items="center",
+            justify_content="center",
+            z_index="1000",
+            padding="1em",
+        ),
+        rx.fragment(),
+    )
+
+
+def earth_map() -> rx.Component:
+    """Real planet Earth map showing geo-anchored creatures.
+
+    Uses OpenStreetMap embedded iframe. In future, switch to Leaflet
+    with custom markers for each geo-anchored creature.
+    """
+    return rx.vstack(
+        rx.text("🗺️ Your Creatures on Earth", font_size="0.85em",
+                color="#e5e7eb", font_weight="bold", text_align="center"),
+        rx.html(
+            f"""<iframe
+                width="100%" height="320" style="border-radius:12px;border:0"
+                loading="lazy" allowfullscreen
+                src="https://www.openstreetmap.org/export/embed.html?bbox=-180,-90,180,90&layer=mapnik"
+            ></iframe>"""
+        ),
+        rx.text("Your summoned creatures appear where your thoughts were born.",
+                font_size="0.65em", color="#6b7280", font_style="italic",
+                text_align="center", max_width="320px"),
+        spacing="2",
+        align="center",
+        width="100%",
+        padding="0.5em",
+    )
+
+
 def index() -> rx.Component:
     """GameBoy-style single-screen TMA. Everything visible at once, no scrolling.
     Three zones: TOP (creature), MIDDLE (stats+input), BOTTOM (nav).
     Like Pokémon Gold — all on one iPhone screen."""
     return rx.center(
+        # Tutorial overlay (first visit only, on top of everything)
+        tutorial_overlay(),
         # Outer container: fixed height = 100vh, no overflow
         rx.box(
             rx.vstack(
@@ -1050,12 +1168,7 @@ def index() -> rx.Component:
                                 creature_care_panel(),
                                 rx.cond(
                                     TerramonState.active_tab == "map",
-                                    rx.box(
-                                        rx.text("🗺️ Map mode — coming soon",
-                                                color="#9ca3af", font_size="0.85em"),
-                                        text_align="center",
-                                        padding="1em",
-                                    ),
+                                    earth_map(),
                                     rx.fragment(),
                                 ),
                             ),
