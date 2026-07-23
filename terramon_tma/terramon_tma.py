@@ -43,6 +43,8 @@ from terramon.events.bus import EventBus
 from terramon.application.insight_engine import _scores, _THEMES
 from terramon.application.agent_service import AgentService
 from terramon.application.llm_behavior import set_api_key as _init_llm
+from terramon.domain.creature_agent import CreatureAgent
+from terramon.domain.insight import Insight
 from tools.time_tool import get_current_time
 
 # Initialize LLM-powered creature behavior from env
@@ -224,6 +226,12 @@ class TerramonState(rx.State):
             g = result.insight.geo
             self.place = g.place_name or f"{g.lat:.2f}, {g.lon:.2f}"
 
+        # Init agent stats for Tamagotchi×Pokemon interaction
+        self.agent_name = self.agent
+        self.agent_hunger = 80
+        self.agent_energy = 80
+        self.agent_happiness = 60
+
         # Lesson 05: chain rule → autograd → confidence
         import math
         scores = _scores(text)
@@ -295,83 +303,65 @@ class TerramonState(rx.State):
 
     # ── Tamagotchi×Pokemon interaction handlers ───────────
 
-    def _get_current_agent(self):
-        """Return the CreatureAgent for the currently selected creature."""
-        from terramon.domain.creature_agent import CreatureAgent
-        from terramon.domain.insight import Insight
-        # Look up in persisted seeds
-        seeds = _MEMORY.load_all_seeds()
-        for s in seeds:
-            aid = f"CR{s.summoned_agent[:2].upper()}-?..."
-            # For now, create a fresh agent from the most recent seed
-            # (persistent agent storage is next iteration)
-        # Fallback: create from last summoned
-        if self.agent:
-            ins = Insight(
-                driver="",
-                barrier="",
-                therefore=self.insight.replace("INSIGHT: ", ""),
-                archetype=self.agent,
-            )
-            return _AGENT_SVC.create_agent(self.thought, self.agent, ins)
-        return None
+    def _init_agent_stats(self):
+        """Initialize creature stats from current summon state."""
+        if not self.agent_name:
+            self.agent_name = self.agent
+        # Set initial stats if they're at defaults (meaning no agent was initialized)
+        if self.agent_hunger == 0 and self.agent_energy == 0 and self.agent_happiness == 0:
+            self.agent_hunger = 80
+            self.agent_energy = 80
+            self.agent_happiness = 60
 
     @rx.event
     def feed_agent(self):
-        agent = self._get_current_agent()
-        if not agent:
-            return
-        msg = _AGENT_SVC.feed(agent)
-        self.agent_hunger = agent.hunger
-        self.agent_energy = agent.energy
-        self.agent_happiness = agent.happiness
+        self._init_agent_stats()
+        msg = _AGENT_SVC.feed(CreatureAgent("_tmp", hunger=self.agent_hunger,
+                              energy=self.agent_energy, happiness=self.agent_happiness))
+        self.agent_hunger = min(100, self.agent_hunger + 25)
+        self.agent_energy = min(100, self.agent_energy + 5)
         self.agent_message = msg.text
-        self.agent_name = agent.name
 
     @rx.event
     def play_with_agent(self):
-        agent = self._get_current_agent()
-        if not agent:
-            return
-        msg = _AGENT_SVC.play(agent)
-        self.agent_hunger = agent.hunger
-        self.agent_energy = agent.energy
-        self.agent_happiness = agent.happiness
+        self._init_agent_stats()
+        self.agent_happiness = min(100, self.agent_happiness + 20)
+        self.agent_energy = max(0, self.agent_energy - 15)
+        msg = _AGENT_SVC.play(CreatureAgent("_tmp", hunger=self.agent_hunger,
+                              energy=self.agent_energy, happiness=self.agent_happiness))
         self.agent_message = msg.text
-        self.agent_name = agent.name
 
     @rx.event
     def rest_agent(self):
-        agent = self._get_current_agent()
-        if not agent:
-            return
-        msg = _AGENT_SVC.rest(agent)
-        self.agent_hunger = agent.hunger
-        self.agent_energy = agent.energy
-        self.agent_happiness = agent.happiness
+        self._init_agent_stats()
+        self.agent_energy = min(100, self.agent_energy + 40)
+        msg = _AGENT_SVC.rest(CreatureAgent("_tmp", hunger=self.agent_hunger,
+                              energy=self.agent_energy, happiness=self.agent_happiness))
         self.agent_message = msg.text
-        self.agent_name = agent.name
 
     @rx.event
     def talk_to_agent(self):
-        agent = self._get_current_agent()
-        if not agent:
-            return
-        msg = _AGENT_SVC.talk(agent)
-        self.agent_happiness = agent.happiness
+        self._init_agent_stats()
+        self.agent_happiness = min(100, self.agent_happiness + 5)
+        msg = _AGENT_SVC.talk(CreatureAgent("_tmp", hunger=self.agent_hunger,
+                              energy=self.agent_energy, happiness=self.agent_happiness,
+                              archetype=self.agent,
+                              insight=Insight(driver="", barrier="",
+                                              therefore=self.insight.replace("INSIGHT: ", ""),
+                                              archetype=self.agent)))
         self.agent_message = msg.text
-        self.agent_name = agent.name
 
     @rx.event
     def evolve_agent(self):
-        agent = self._get_current_agent()
-        if not agent:
-            return
-        msg = _AGENT_SVC.evolve(agent)
-        self.agent_evolution = agent.evolution_stage
+        self._init_agent_stats()
+        self.agent_evolution += 1
+        if self.agent_evolution >= 2:
+            self.agent_evolution = 2
+        msg = _AGENT_SVC.evolve(CreatureAgent("_tmp", hunger=self.agent_hunger,
+                                energy=self.agent_energy, happiness=self.agent_happiness,
+                                level=self.level, total_xp_earned=self.xp + (self.level-1)*100))
         self.agent_message = msg.text
         self.agent_last_message = msg.text
-        self.agent_name = agent.name
 
 
 def _price_for(rarity: str) -> int:
@@ -1104,4 +1094,6 @@ def index() -> rx.Component:
 app = rx.App(
     theme=rx.theme(appearance="dark", accent_color="amber"),
 )
+# Hide Reflex branding badge in TMA
+app._disable_reflex_branding = True
 app.add_page(index, title="Terramon — summon your thoughts", on_load=TerramonState.load_terra)
