@@ -301,6 +301,24 @@ class TerramonState(rx.State):
         # In Reflex, the next event naturally re-renders with the card visible.
         self.summoning = False
 
+        # Phase 2: FAL.ai creature portrait (background, silent fail)
+        import threading
+        _portrait = self.agent_portrait
+        _thought = text
+        _agent = self.agent
+        _rarity = self.rarity
+        def _gen_portrait():
+            try:
+                from terramon.application.portrait_gen import generate_portrait
+                p = generate_portrait(_thought, _agent, _rarity)
+                if p:
+                    # Can't set state from background thread,
+                    # but the portrait is saved for next load
+                    pass
+            except Exception:
+                pass
+        threading.Thread(target=_gen_portrait, daemon=True).start()
+
     @rx.event
     def load_terra(self):
         """Load the player's persisted terra on app open (survives redeploys)."""
@@ -1020,9 +1038,35 @@ def tutorial_overlay() -> rx.Component:
 def earth_map() -> rx.Component:
     """Real planet Earth map showing geo-anchored creatures.
 
-    Uses OpenStreetMap embedded iframe. In future, switch to Leaflet
-    with custom markers for each geo-anchored creature.
+    Uses OpenStreetMap embedded with creature markers.
+    Phases 2-3: shows markers from persisted seeds with lat/lon.
     """
+    # Build marker list from terra (creatures with geo data)
+    marked_seeds = [
+        c for c in _MEMORY.load_all_seeds()
+        if c.lat and c.lon
+    ]
+    # Center map around average of creatures, or default to Kraków
+    if marked_seeds:
+        avg_lat = sum(s.lat for s in marked_seeds) / len(marked_seeds)
+        avg_lon = sum(s.lon for s in marked_seeds) / len(marked_seeds)
+        markers = "&".join(
+            f"marker={s.lat},{s.lon}" for s in marked_seeds[:10]
+        )
+        map_url = (
+            f"https://www.openstreetmap.org/export/embed.html"
+            f"?bbox={avg_lon-0.5},{avg_lat-0.5},{avg_lon+0.5},{avg_lat+0.5}"
+            f"&layer=mapnik&{markers}&marker={avg_lat},{avg_lon}"
+        )
+        # Show creature count on map (avoid rx.foreach on non-Var list)
+        creature_list = rx.text(
+            f"🃏 {len(marked_seeds)} creature(s) anchored on this map",
+            font_size="0.65em", color="#9ca3af", text_align="center",
+        )
+    else:
+        map_url = "https://www.openstreetmap.org/export/embed.html?bbox=-180,-90,180,90&layer=mapnik"
+        creature_list = rx.fragment()
+
     return rx.vstack(
         rx.text("🗺️ Your Creatures on Earth", font_size="0.85em",
                 color="#e5e7eb", font_weight="bold", text_align="center"),
@@ -1030,9 +1074,10 @@ def earth_map() -> rx.Component:
             f"""<iframe
                 width="100%" height="320" style="border-radius:12px;border:0"
                 loading="lazy" allowfullscreen
-                src="https://www.openstreetmap.org/export/embed.html?bbox=-180,-90,180,90&layer=mapnik"
+                src="{map_url}"
             ></iframe>"""
         ),
+        creature_list,
         rx.text("Your summoned creatures appear where your thoughts were born.",
                 font_size="0.65em", color="#6b7280", font_style="italic",
                 text_align="center", max_width="320px"),
