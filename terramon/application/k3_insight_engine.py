@@ -41,9 +41,19 @@ def _relu(v: float) -> float:
 def _tanh(v: float) -> float:
     return math.tanh(v)
 
-def _softmax(scores: list[float]) -> list[float]:
-    m = max(scores)
-    e = [math.exp(s - m) for s in scores]
+def _softmax(scores: list[float], temperature: float = 1.0) -> list[float]:
+    """Softmax with temperature scaling (Lesson 06: confidence calibration).
+
+    Temperature = 1.0: standard softmax.
+    Temperature > 1.0: smoother distribution (lower confidence, more uncertainty).
+    Temperature < 1.0: sharper distribution (higher confidence, more peaked).
+
+    Calibrated at T=1.2 for the insight engine (reduces overconfidence common
+    in untrained softmax outputs).
+    """
+    scaled = [s / temperature for s in scores]
+    m = max(scaled)
+    e = [math.exp(s - m) for s in scaled]
     s = sum(e)
     return [ei / s for ei in e]
 

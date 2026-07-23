@@ -99,6 +99,7 @@ class CreatureAgent:
     energy: int = 80
     happiness: int = 60  # starts content
     evolution_stage: int = 0  # 0=basic, 1=evolved, 2=final
+    evolution_probability: float = 0.0  # Lesson 06: logistic P(evolve) — 0.0 to 1.0
 
     # History
     interaction_count: int = 0
@@ -118,12 +119,16 @@ class CreatureAgent:
 
     @property
     def can_evolve(self) -> bool:
-        return (
-            self.level >= self.evolution_requirement.min_level
-            and self.happiness >= self.evolution_requirement.min_happiness
-            and self.total_xp_earned >= self.evolution_requirement.min_xp_total
-            and self.evolution_stage < 2
-        )
+        """Logistic probability of evolution (smooth, not cliff)."""
+        # Sigmoid centered at min_level with temperature = 3
+        import math as _m
+        level_z = (self.level - self.evolution_requirement.min_level) / 3.0
+        happiness_z = (self.happiness - self.evolution_requirement.min_happiness) / 10.0
+        xp_z = (self.total_xp_earned - self.evolution_requirement.min_xp_total) / 200.0
+        # Combined logistic: P(evolve) = sigmoid(level_contrib + happiness_contrib + xp_contrib)
+        z = level_z + happiness_z + xp_z
+        self.evolution_probability = round(1.0 / (1.0 + _m.exp(-z)), 4)
+        return self.evolution_probability > 0.5 and self.evolution_stage < 2
 
     # -- Interaction methods --
 

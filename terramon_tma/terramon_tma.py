@@ -159,6 +159,11 @@ class TerramonState(rx.State):
     agent_name: str = ""
     agent_evolution: int = 0
     agent_last_message: str = ""
+    agent_evolution_prob: float = 0.0  # Lesson 06: logistic P(evolve)
+
+    # Lesson 06 probability displays
+    archetype_probs: list[dict] = []  # [{"name": "Hero", "prob": 0.87}, ...]
+    rarity_odds: list[float] = []  # [P(common), P(uncommon), P(rare), P(legendary)]
 
     # The player's terra: every creature that ever lived (persisted).
     terra: list[dict] = []
@@ -227,6 +232,34 @@ class TerramonState(rx.State):
         total = sum(exps)
         max_prob = max(e / total for e in exps)
         self.intelligence = round(max_prob * 100)
+
+        # Lesson 06: top-3 archetype probabilities
+        jungian_12 = ["Innocent","Orphan","Hero","Caregiver","Explorer",
+                      "Rebel","Lover","Creator","Jester","Sage","Magician","Ruler"]
+        probs_12 = [e / total for e in exps]
+        top3_idx = sorted(range(len(probs_12)), key=lambda i: probs_12[i], reverse=True)[:3]
+        self.archetype_probs = [
+            {"name": jungian_12[i], "prob": round(probs_12[i], 3)}
+            for i in top3_idx
+        ]
+
+        # Lesson 06: rarity odds (Dirichlet distribution)
+        from terramon.domain.rarity import classify_rarity
+        rarity_result = classify_rarity(text)
+        self.rarity_odds = rarity_result.probabilities
+
+        # Lesson 06: evolution probability (logistic)
+        from terramon.domain.creature_agent import CreatureAgent
+        from terramon.domain.insight import Insight
+        _tmp_agent = CreatureAgent(
+            agent_id="tmp", archetype=self.agent,
+            insight=Insight(driver="", barrier="", therefore="",
+                           archetype=self.agent),
+            level=self.level, xp=self.xp,
+            total_xp_earned=self.xp + (self.level - 1) * 100,
+        )
+        _tmp_agent.can_evolve  # triggers logistic computation
+        self.agent_evolution_prob = _tmp_agent.evolution_probability
 
         # Reload terra (all persisted creatures).
         seeds = _MEMORY.load_all_seeds()
@@ -492,6 +525,34 @@ def creature_card() -> rx.Component:
                         font_size="0.75em", color="#c4b5fd", font_weight="bold"),
                 spacing="1",
             ),
+            # Lesson 06: top-3 archetype probability sparkline bars
+            rx.vstack(
+                rx.foreach(
+                    TerramonState.archetype_probs,
+                    lambda item: rx.hstack(
+                        rx.text(item["name"], font_size="0.65em", color="#9ca3af", width="5em"),
+                        rx.box(
+                            rx.box(
+                                style={
+                                    "width": f"{int(item['prob'] * 100)}%",
+                                    "height": "6px",
+                                    "background": "#c4b5fd",
+                                    "border_radius": "999px",
+                                    "transition": "width 0.3s ease",
+                                },
+                            ),
+                            width="100%", height="6px",
+                            background="#27272a", border_radius="999px", overflow="hidden",
+                        ),
+                        rx.text(f"{int(item['prob'] * 100)}%",
+                                font_size="0.65em", color="#6b7280", width="2.5em"),
+                        spacing="1",
+                        width="100%",
+                    ),
+                ),
+                width="100%",
+                spacing="1",
+            ),
             # v2: geo anchor — show where on Earth this creature was born
             rx.cond(
                 TerramonState.place != "",
@@ -606,6 +667,25 @@ def creature_care_panel() -> rx.Component:
                     rx.box(
                         style={"width": "50%", "height": "100%",
                                "background": "linear-gradient(90deg, #ef4444, #ef4444dd)",
+                               "border_radius": "999px",
+                               "transition": "width 0.3s ease"},
+                    ),
+                    width="100%", height="8px",
+                    background="#27272a", border_radius="999px", overflow="hidden",
+                ),
+                # Lesson 06: evolution probability (logistic)
+                rx.hstack(
+                    rx.text("✦ Evolution", font_size="0.7em", color="#f59e0b"),
+                    rx.text(TerramonState.agent_evolution_prob.to_string() + "%",
+                            font_size="0.7em", color="#f59e0b", font_weight="bold"),
+                    justify="between",
+                    width="100%",
+                ),
+                rx.box(
+                    rx.box(
+                        style={"width": TerramonState.agent_evolution_prob.to_string() + "%",
+                               "height": "100%",
+                               "background": "linear-gradient(90deg, #f59e0b, #d97706)",
                                "border_radius": "999px",
                                "transition": "width 0.3s ease"},
                     ),
