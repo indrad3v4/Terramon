@@ -167,6 +167,10 @@ class TerramonState(rx.State):
     archetype_probs: list[dict] = []  # [{"name": "Hero", "prob": 0.87}, ...]
     rarity_odds: list[float] = []  # [P(common), P(uncommon), P(rare), P(legendary)]
 
+    # Phase 4 — economy & retention
+    last_tick: str = ""  # ISO timestamp of last decay tick
+    agent_portrait: str = ""  # FAL.ai generated portrait path
+
     # The player's terra: every creature that ever lived (persisted).
     terra: list[dict] = []
 
@@ -185,6 +189,18 @@ class TerramonState(rx.State):
     def rarity_glow_style(self) -> str:
         """CSS box-shadow glow matching current creature rarity."""
         return _RARITY_GLOW.get(self.rarity, _RARITY_GLOW["common"])
+
+    @rx.var
+    def evolution_hint(self) -> str:
+        """Actionable evolution progress text (Phase 2)."""
+        pct = self.agent_evolution_prob
+        if pct >= 50:
+            return "✦ Ready to evolve! Click EVOLVE."
+        if self.agent_happiness < 70:
+            return f"Need {70 - self.agent_happiness} more ❤️ Happiness"
+        if self.level < 10:
+            return f"{10 - self.level} more levels to evolve"
+        return "Keep interacting to grow"
 
     @rx.event
     def set_thought(self, value: str):
@@ -299,6 +315,10 @@ class TerramonState(rx.State):
             self.distinct = _LOOP.progress.distinct_count
             self.goal = _LOOP.progress.goal_distinct
 
+        # Phase 4: tick decay on app open (retention)
+        if seeds:
+            self._apply_tick_decay()
+
     @rx.event
     def capture(self):
         """Open the photo-entry path (simulated in this MVP)."""
@@ -375,6 +395,47 @@ class TerramonState(rx.State):
                                 level=self.level, total_xp_earned=self.xp + (self.level-1)*100))
         self.agent_message = msg.text
         self.agent_last_message = msg.text
+
+    @rx.event
+    def mint_creature(self):
+        """Mint current creature via Telegram Stars / Lightning."""
+        if not self.has_summoned or self.price_sats <= 0:
+            return
+        self.agent_message = f"⚡ Minting {self.agent} for {self.price_sats} Stars..."
+
+    @rx.event
+    def share_creature(self):
+        """Copy shareable creature card to clipboard (virality)."""
+        if not self.has_summoned:
+            return
+        card = (
+            f"🃏 Terramon — {self.agent}\n"
+            f"✦ Rarity: {self.rarity} {self.sigil}\n"
+            f"   \"{self.thought}\"\n"
+            f"Lv.{self.level} · {self.distinct}/5 Tamer\n"
+            f"🌍 terramon.app"
+        )
+        yield rx.set_clipboard(card)
+        self.agent_message = "📤 Creature card copied! Share it anywhere."
+
+    def _apply_tick_decay(self):
+        """Apply stat decay based on elapsed time (Phase 4 retention).
+        Called from load_terra() on every app open."""
+        import datetime
+        if not self.last_tick:
+            self.last_tick = datetime.datetime.now().isoformat()
+            return
+        try:
+            last_dt = datetime.datetime.fromisoformat(self.last_tick)
+            hours = (datetime.datetime.now() - last_dt).total_seconds() / 3600
+            ticks = min(int(hours), 48)
+            for _ in range(ticks):
+                self.agent_hunger = max(0, self.agent_hunger - 5)
+                self.agent_energy = max(0, self.agent_energy - 3)
+                self.agent_happiness = max(0, self.agent_happiness - 2)
+            self.last_tick = datetime.datetime.now().isoformat()
+        except (ValueError, TypeError):
+            self.last_tick = datetime.datetime.now().isoformat()
 
 
 def _price_for(rarity: str) -> int:
@@ -574,6 +635,7 @@ def creature_card() -> rx.Component:
                 rx.tooltip(
                     rx.button(
                         "⚡ MINT · " + TerramonState.price_sats.to_string() + " sats",
+                        on_click=TerramonState.mint_creature,
                         background=TerramonState.color,
                         color="#0b0b0f",
                         width="100%",
@@ -581,9 +643,17 @@ def creature_card() -> rx.Component:
                         _hover={"transform": "scale(1.02)", "opacity": "0.9"},
                         style={"transition": "all 0.15s ease"},
                     ),
-                    content="Mint this creature to Telegram Stars — it becomes a tradable collectible on-chain",
+                    content="Mint this creature to Telegram Stars — tradable collectible on-chain",
                 ),
                 rx.text("free summon", color="#6b7280", font_size="0.85em"),
+            ),
+            # Phase 4: Share button (virality)
+            rx.button(
+                "📤 Share",
+                on_click=TerramonState.share_creature,
+                variant="surface", size="2", width="100%",
+                color_scheme="gray",
+                margin_top="0.25em",
             ),
             # SIN 11: goal celebration with visual weight
             rx.cond(
@@ -698,6 +768,9 @@ def creature_care_panel() -> rx.Component:
                     width="100%", height="8px",
                     background="#27272a", border_radius="999px", overflow="hidden",
                 ),
+                # Phase 2: evolution hint (actionable progress text)
+                rx.text(TerramonState.evolution_hint, font_size="0.65em",
+                        color="#f59e0b", font_style="italic", text_align="center"),
                 # Agent message (speech bubble)
                 rx.cond(
                     TerramonState.agent_message != "",
@@ -1013,9 +1086,12 @@ def index() -> rx.Component:
                             rx.text(TerramonState.agent, color=TerramonState.color,
                                     font_weight="bold", font_size="1em"),
                             rx.text('"' + TerramonState.thought[:40] + '"',
-                                    color="#e5e7eb", font_style="italic",
                                     font_size="0.7em", text_align="center",
                                     max_width="260px"),
+                            # Phase 2: archetype lore on compact card
+                            rx.text(TerramonState.lore, font_size="0.65em",
+                                    color="#9ca3af", text_align="center",
+                                    max_width="260px", font_style="italic"),
                             spacing="1",
                             align="center",
                         ),
