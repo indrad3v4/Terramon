@@ -1,2 +1,4 @@
-reflex==0.9.7
-reflex-base==0.9.7
+reflex>=0.9.7,<0.10.0
+reflex-base>=0.9.7,<0.10.0
+python-dotenv>=1.0.0
+fal-client>=0.3.0

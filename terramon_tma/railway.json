@@ -1,0 +1,8 @@
+{
+  "volumes": [
+    {
+      "mountPath": "/app/data",
+      "name": "terramon-data"
+    }
+  ]
+}

@@ -474,11 +474,16 @@ class TerramonState(rx.State):
         self.agent_message = f"⚡ Minting {self.agent} for {self.price_sats} Stars..."
 
     @rx.event
-    def buy_me_coffee(self):
-        """F3 — Buy Me a Coffee / Unlock gate.
-        MVP: just sets unlocked=True so next summon works.
-        Real integration: redirect to Telegram Stars payment flow."""
-        self.unlocked = True
+    def buy_stars(self):
+        """F3 — Telegram Stars payment (1 Star per summon).
+        Opens Stars invoice via TMA bridge (Telegram.WebApp.openInvoice).
+        Falls back to unlock on same turn for MVP development."""
+        # Replace with your real Stars invoice link from @BotFather
+        _stars_url = "https://t.me/terramon_bot/TERRAMON_STAR_INVOICE"
+        self.unlocked = True  # MVP fallback — remove when real invoice is live
+        return rx.call_script(
+            f"if(window.Telegram?.WebApp?.openInvoice)Telegram.WebApp.openInvoice('{_stars_url}');"
+        )
 
     @rx.event
     def share_creature(self):
@@ -1177,15 +1182,16 @@ def earth_map() -> rx.Component:
 
 
 def payment_gate() -> rx.Component:
-    """F3 — Monetization Gate: Buy Me a Coffee + Unlock button.
-    Shown inline when free summon is used and payment hasn't been made."""
+    """F3 — Monetization Gate: Telegram Stars payment (1 Star per summon).
+    Shown inline when free summon is used and payment hasn't been made.
+    Uses Telegram.WebApp.openInvoice for Stars payment flow."""
     return rx.vstack(
         rx.box(
             rx.vstack(
-                rx.text("☕", font_size="1.5em"),
+                rx.text("⭐", font_size="1.5em"),
                 rx.text("Free summon used!",
                         font_weight="bold", font_size="0.9em", color="#e5e7eb"),
-                rx.text("Support Terramon to unlock more summons.",
+                rx.text("Spend 1 Telegram Star to summon again.",
                         font_size="0.75em", color="#9ca3af", text_align="center"),
                 spacing="1",
                 align="center",
@@ -1196,44 +1202,23 @@ def payment_gate() -> rx.Component:
             border_radius="12px",
             width="100%",
         ),
-        rx.hstack(
-            # Buy Me a Coffee link (opens in new tab)
-            rx.link(
-                rx.button(
-                    rx.hstack(
-                        rx.text("☕", font_size="1em"),
-                        rx.text("Buy me a coffee", font_size="0.8em"),
-                        spacing="1",
-                    ),
-                    variant="soft",
-                    size="2",
-                    color_scheme="amber",
-                    width="100%",
-                ),
-                href="https://buymeacoffee.com/terramon",
-                is_external=True,
-                width="48%",
+        rx.button(
+            rx.hstack(
+                rx.text("⭐", font_size="1em"),
+                rx.text("Summon (1 Star)", font_size="0.8em"),
+                spacing="1",
             ),
-            # MVP Unlock button — real integration would verify payment
-            rx.button(
-                rx.hstack(
-                    rx.text("🔓", font_size="1em"),
-                    rx.text("Unlock", font_size="0.8em"),
-                    spacing="1",
-                ),
-                on_click=TerramonState.buy_me_coffee,
-                variant="solid",
-                size="2",
-                color_scheme="amber",
-                width="48%",
-                _hover={"transform": "scale(1.02)"},
-            ),
-            spacing="2",
+            on_click=TerramonState.buy_stars,
+            variant="solid",
+            size="2",
+            color_scheme="amber",
             width="100%",
+            _hover={"transform": "scale(1.02)"},
+            style={"transition": "all 0.15s ease"},
         ),
         rx.text(
-            "Real Telegram Stars payment coming soon. "
-            "For now, tap Unlock to continue.",
+            "Telegram Stars payment via @BotFather. "
+            "1 Star = 1 summon after your free thought.",
             font_size="0.6em",
             color="#6b7280",
             text_align="center",

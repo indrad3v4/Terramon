@@ -8,13 +8,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt && \
+    pip install --no-cache-dir --upgrade reflex reflex-base
 
 COPY . .
 
-# Pre-download frontend toolchain + compile at build time (faster cold start)
-RUN reflex init --loglevel warning || true
-RUN reflex export --frontend-only --no-zip --loglevel warning || true
+# Force full frontend recompile — delete any cached .web from prior builds
+RUN rm -rf .web
+
+# Init with debug logging so Railway build logs show where errors happen
+RUN reflex init --loglevel debug
+
+# Export frontend to static files (faster cold start, no zip archive)
+RUN reflex export --frontend-only --no-zip --loglevel debug
 
 # Railway provides $PORT. Reflex serves frontend + backend together in prod.
 ENV PORT=8080

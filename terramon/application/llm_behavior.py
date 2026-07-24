@@ -44,7 +44,7 @@ def has_api_key() -> bool:
     return bool(_API_KEY or os.environ.get("OPENROUTER_API_KEY"))
 
 
-def _build_system_prompt(agent: CreatureAgent) -> str:
+def _build_system_prompt(agent: CreatureAgent, interaction: str = "") -> str:
     """Build the system prompt that defines the creature's personality.
 
     The LLM is told to act AS the creature, not describe it.
@@ -69,9 +69,11 @@ Your current state:
 - Energy: {agent.energy}/100 (lower = more tired)
 - Happiness: {agent.happiness}/100 (lower = sadder)"""
 
+    if interaction == "summon":
+        prompt += f"""\nThis is your BIRTH MOMENT. The player's thought just summoned you into existence. Welcome them, acknowledge the thought that created you. Speak as if appearing for the very first time."""
+
     if insight:
-        prompt += f"""
-Your INSIGHT (the hidden reason you exist for this player):
+        prompt += f"""\nYour INSIGHT (the hidden reason you exist for this player):
 - DRIVER (what the player wants): {insight.driver}
 - BARRIER (what blocks the player): {insight.barrier}
 - THEREFORE (what you DO): {insight.therefore}"""
@@ -92,7 +94,7 @@ Respond in character. 1-2 sentences max."""
 
 def _build_messages(agent: CreatureAgent, interaction: str, player_input: str = "") -> list[dict]:
     """Build the messages array for the OpenRouter API call."""
-    system = _build_system_prompt(agent).format(
+    system = _build_system_prompt(agent, interaction).format(
         archetype=agent.archetype,
         interaction_type=interaction,
     )
@@ -122,6 +124,8 @@ def _build_messages(agent: CreatureAgent, interaction: str, player_input: str = 
         messages.append({"role": "user", "content": f"You've grown enough. It's time to evolve."})
     elif interaction == "tick":
         messages.append({"role": "user", "content": f"The creature feels a need stirring."})
+    elif interaction == "summon":
+        messages.append({"role": "user", "content": f"I thought: '{player_input}'. Now you exist. Who are you?"})
 
     return messages
 
@@ -264,6 +268,12 @@ def _template_response(self, interaction: str) -> AgentMessage:
             f"It gazes at the horizon.",
             f"A soft {self._archetype_sound()} echoes.",
             f"'{self._archetype_verb()}.' It says to itself.",
+        ]
+    elif interaction == "summon":
+        texts = [
+            f"I am your {self.archetype}. Born from your thought, I am here.",
+            f"Your thought reached through the terra. I am what emerged.",
+            f"A {self.archetype}. That is what you needed. I understand.",
         ]
     else:  # talk
         texts = [
