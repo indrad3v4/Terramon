@@ -937,27 +937,23 @@ def creature_care_panel() -> rx.Component:
 
 def demo_creature() -> rx.Component:
     """Animated shadow-creature waiting for first input — breathing, floating, pulsing."""
-    # CSS keyframes for the creature animations
-    breathe = rx.keyframes(
-        {
-            "0%": {"transform": "scale(1) translateY(0)", "opacity": "0.55"},
-            "50%": {"transform": "scale(1.04) translateY(-4px)", "opacity": "0.75"},
-            "100%": {"transform": "scale(1) translateY(0)", "opacity": "0.55"},
-        }
-    )
-    pulse_glow = rx.keyframes(
-        {
-            "0%": {"box_shadow": "0 0 20px rgba(212, 180, 254, 0.10)"},
-            "50%": {"box_shadow": "0 0 40px rgba(212, 180, 254, 0.25)"},
-            "100%": {"box_shadow": "0 0 20px rgba(212, 180, 254, 0.10)"},
-        }
-    )
-    blink = rx.keyframes(
-        {
-            "0%, 45%, 55%, 100%": {"opacity": "1"},
-            "50%": {"opacity": "0.15"},
-        }
-    )
+    # CSS keyframes defined as animations via CSS style tag
+    _DEMO_ANIM = """
+@keyframes demoBreathe {
+    0% { transform: scale(1) translateY(0); opacity: 0.55; }
+    50% { transform: scale(1.04) translateY(-4px); opacity: 0.75; }
+    100% { transform: scale(1) translateY(0); opacity: 0.55; }
+}
+@keyframes demoPulseGlow {
+    0% { box-shadow: 0 0 20px rgba(212, 180, 254, 0.10); }
+    50% { box-shadow: 0 0 40px rgba(212, 180, 254, 0.25); }
+    100% { box-shadow: 0 0 20px rgba(212, 180, 254, 0.10); }
+}
+@keyframes demoBlink {
+    0%, 45%, 55%, 100% { opacity: 1; }
+    50% { opacity: 0.15; }
+}
+"""
     return rx.vstack(
         # The shadow creature — amorphous blob shape with breathing animation
         rx.box(
@@ -971,7 +967,7 @@ def demo_creature() -> rx.Component:
                             border_radius="50%",
                             background="radial-gradient(circle, #d8b4fe 30%, #a78bfa88)",
                             box_shadow="0 0 12px #a78bfa",
-                            style={"animation": f"{blink} 3.5s ease-in-out infinite"},
+                            style={"animation": "demoBlink 3.5s ease-in-out infinite"},
                         ),
                         rx.box(
                             width="6px", height="6px",
@@ -981,7 +977,7 @@ def demo_creature() -> rx.Component:
                             border_radius="50%",
                             background="radial-gradient(circle, #d8b4fe 30%, #a78bfa88)",
                             box_shadow="0 0 12px #a78bfa",
-                            style={"animation": f"{blink} 3.5s ease-in-out infinite",
+                            style={"animation": "demoBlink 3.5s ease-in-out infinite",
                                    "animation_delay": "0.15s"},
                         ),
                         spacing="3",
@@ -1001,13 +997,13 @@ def demo_creature() -> rx.Component:
                 width="120px", height="110px",
                 border_radius="50% 50% 45% 45%",
                 background="radial-gradient(ellipse at 50% 40%, #2a2a3a 20%, #1a1a28 60%, transparent 80%)",
-                style={"animation": f"{breathe} 3s ease-in-out infinite"},
+                style={"animation": "demoBreathe 3s ease-in-out infinite"},
                 display="flex",
                 align_items="center",
                 justify_content="center",
             ),
             # Glow aura around creature
-            style={"animation": f"{pulse_glow} 3s ease-in-out infinite"},
+            style={"animation": "demoPulseGlow 3s ease-in-out infinite"},
             display="flex",
             align_items="center",
             justify_content="center",
@@ -1253,13 +1249,15 @@ def payment_gate() -> rx.Component:
 
 
 # ── F2: Tamer Unlock celebration (5/5 distinct → "Terra Awakened") ──
-_CELEBRATION_SPARKLE = rx.keyframes(
-    {
-        "0%": {"opacity": "0.3", "transform": "scale(1)"},
-        "50%": {"opacity": "1", "transform": "scale(1.05)"},
-        "100%": {"opacity": "0.3", "transform": "scale(1)"},
-    }
-)
+# CSS keyframes defined as a style string (Reflex 0.9.x compat)
+_CELEBRATION_STYLE = """
+@keyframes celebrationSparkle {
+    0% { opacity: 0.3; transform: scale(1); }
+    50% { opacity: 1; transform: scale(1.05); }
+    100% { opacity: 0.3; transform: scale(1); }
+}
+"""
+rx.style(_CELEBRATION_STYLE)
 
 
 def celebration_component() -> rx.Component:
@@ -1270,7 +1268,7 @@ def celebration_component() -> rx.Component:
         rx.vstack(
             rx.box(height="12vh"),
             rx.text("✦", color="#f59e0b", font_size="4em",
-                    style={"animation": f"{_CELEBRATION_SPARKLE} 1.5s ease-in-out infinite"}),
+                    style={"animation": "celebrationSparkle 1.5s ease-in-out infinite"}),
             rx.heading("TERRA AWAKENED", size="7", color="#f59e0b",
                        font_weight="bold", letter_spacing="0.08em",
                        text_shadow="0 0 30px rgba(245,158,11,0.6)"),

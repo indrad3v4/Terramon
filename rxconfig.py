@@ -8,6 +8,6 @@ import reflex as rx
 
 config = rx.Config(
     app_name="terramon_tma",
-    # Railway/prod: set API URL via env; local defaults are fine.
     telemetry_enabled=False,
+    disable_plugins=["reflex_base.plugins.sitemap.SitemapPlugin"],
 )
