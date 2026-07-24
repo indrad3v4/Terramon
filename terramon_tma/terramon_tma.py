@@ -29,6 +29,17 @@ UI/UX SINS FIXED (July 2026, after ccgs-p + prism audit):
 
 from __future__ import annotations
 
+import logging, sys, traceback
+
+# Logging setup — writes to stderr (visible in Railway logs)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    stream=sys.stderr,
+    force=True,
+)
+log = logging.getLogger("terramon")
+
 import reflex as rx
 from pathlib import Path
 
@@ -219,140 +230,132 @@ class TerramonState(rx.State):
 
     @rx.event
     def summon(self):
+        """Summon a creature from thought."""
         text = self.thought.strip()
         if not text:
             return
-
-        # F3 — Monetization Gate: first summon free, then payment required
         if self.summon_count > 0 and not self.unlocked:
-            # Show payment prompt instead of summoning
+            self.summoning = False
+            return
+        self.summoning = True
+        try:
+            result = _LOOP.take_turn(text, color=False)
+            rarity = result.rarity
+            self.agent = result.agent
+            self.rarity = rarity
+            self.sigil = _RARITY_SIGIL[rarity]
+            self.color = _RARITY_COLOR[rarity]
+            self.lore = _ARCHETYPE_LORE.get(result.agent, "A thought made flesh.")
+            self.price_sats = _price_for(rarity)
+            self.xp = _LOOP.progress.xp
+            self.level = _LOOP.progress.level
+            self.distinct = _LOOP.progress.distinct_count
+            self.goal = _LOOP.progress.goal_distinct
+            self.goal_reached = result.goal_reached
+            self.has_summoned = True
+            self.summon_count += 1
+            seeds = _MEMORY.load_all_seeds()
+            self.reflection = _reflect_on_memory(seeds, result.agent)
+            if seeds:
+                last_insight = seeds[-1].insight
+                self.insight = f"INSIGHT: {last_insight.therefore}" if last_insight else ""
+            else:
+                self.insight = ""
+            self.place = ""
+            if seeds and seeds[-1].insight and seeds[-1].insight.geo:
+                g = seeds[-1].insight.geo
+                self.place = g.place_name or f"{g.lat:.2f}, {g.lon:.2f}"
+        except Exception as e:
+            log.error(f"take_turn failed: {e}", exc_info=True)
             self.summoning = False
             return
 
-        # SIN 1: show loading state immediately
-        self.summoning = True
-
-        result = _LOOP.take_turn(text, color=False)
-
-        rarity = result.rarity
-        self.agent = result.agent
-        self.rarity = rarity
-        self.sigil = _RARITY_SIGIL[rarity]
-        self.color = _RARITY_COLOR[rarity]
-        self.lore = _ARCHETYPE_LORE.get(result.agent, "A thought made flesh.")
-        self.price_sats = _price_for(rarity)
-        self.xp = _LOOP.progress.xp
-        self.level = _LOOP.progress.level
-        self.distinct = _LOOP.progress.distinct_count
-        self.goal = _LOOP.progress.goal_distinct
-        self.goal_reached = result.goal_reached
-        self.has_summoned = True
-        self.summon_count += 1  # F3: track free summon used
-
-        seeds = _MEMORY.load_all_seeds()
-        self.reflection = _reflect_on_memory(seeds, result.agent)
-
-        # Insight from the most recent seed (TurnResult doesn't carry it)
-        if seeds:
-            last_insight = seeds[-1].insight
-            self.insight = (
-                f"INSIGHT: {last_insight.therefore}"
-                if last_insight is not None
-                else ""
+        # B1: Creature greeting via LLM (silent fail)
+        try:
+            from terramon.application.llm_behavior import generate_response
+            from terramon.domain.insight import Insight
+            _greeting_agent = CreatureAgent(
+                agent_id="summon-greet",
+                archetype=self.agent, place_name=self.place,
+                level=self.level, xp=self.xp,
+                insight=Insight(driver="", barrier="", therefore="", archetype=self.agent),
+                total_xp_earned=self.xp + (self.level - 1) * 100,
             )
-        else:
-            self.insight = ""
+            _greeting_msg = generate_response(_greeting_agent, "summon", text)
+            if _greeting_msg and hasattr(_greeting_msg, 'text'):
+                self.creature_greeting = _greeting_msg.text
+        except Exception as e:
+            log.warning(f"LLM greeting failed: {e}")
+            self.creature_greeting = ""
 
-        self.place = ""
-        if seeds and seeds[-1].insight and seeds[-1].insight.geo:
-            g = seeds[-1].insight.geo
-            self.place = g.place_name or f"{g.lat:.2f}, {g.lon:.2f}"
-
-        # B1: Generate creature greeting via LLM (thought + archetype + geo context)
-        from terramon.application.llm_behavior import generate_response
-        _greeting_agent = CreatureAgent(
-            agent_id="summon-greet",
-            archetype=self.agent,
-            place_name=self.place,
-            level=self.level, xp=self.xp,
-        )
-        _greeting_msg = generate_response(_greeting_agent, "summon", text)
-        self.creature_greeting = _greeting_msg.text
-
-        # B3: Track last_seen and generate memory greeting based on elapsed time
-        import datetime
-        now_iso = datetime.datetime.now().isoformat()
-        if self.last_seen:
-            from datetime import datetime as _dt
-            _last = _dt.fromisoformat(self.last_seen)
-            _now = _dt.fromisoformat(now_iso)
-            _hours = (_now - _last).total_seconds() / 3600
-            if _hours < 1:
-                self.memory_greeting = "You were just here... the creature remembers your presence."
-            elif _hours < 6:
-                self.memory_greeting = f"{int(_hours)}h since you last visited. The creature held your thought close."
-            elif _hours < 24:
-                self.memory_greeting = "Almost a day... the creature wondered when you'd return."
+        # B3: Memory greeting
+        try:
+            import datetime
+            now_iso = datetime.datetime.now().isoformat()
+            if self.last_seen:
+                from datetime import datetime as _dt
+                _hours = (_dt.fromisoformat(now_iso) - _dt.fromisoformat(self.last_seen)).total_seconds() / 3600
+                if _hours < 1:       self.memory_greeting = "You were just here..."
+                elif _hours < 6:     self.memory_greeting = f"{int(_hours)}h since you last visited."
+                elif _hours < 24:    self.memory_greeting = "Almost a day..."
+                else:               self.memory_greeting = f"{int(_hours)}h — the terra grew quiet."
             else:
-                self.memory_greeting = f"{int(_hours)}h — the terra grew quiet without you."
-        else:
-            self.memory_greeting = "A new presence stirs. The creature sees you for the first time."
-        self.last_seen = now_iso
+                self.memory_greeting = "A new presence stirs."
+            self.last_seen = now_iso
+        except Exception as e:
+            log.warning(f"Memory greeting failed: {e}")
+            self.memory_greeting = "Welcome back."
 
-        # Init agent stats for Tamagotchi×Pokemon interaction
+        # Init agent stats
         self.agent_name = self.agent
         self.agent_hunger = 80
         self.agent_energy = 80
         self.agent_happiness = 60
 
-        # Lesson 05: chain rule → autograd → confidence
-        import math
-        scores = _scores(text)
-        max_score = max(scores)
-        exps = [math.exp(s - max_score) for s in scores]
-        total = sum(exps)
-        max_prob = max(e / total for e in exps)
-        self.intelligence = round(max_prob * 100)
+        # Confidence + archetype probabilities
+        try:
+            import math
+            scores = _scores(text)
+            max_score = max(scores)
+            exps = [math.exp(s - max_score) for s in scores]
+            total = sum(exps)
+            self.intelligence = round(max(e / total for e in exps) * 100)
+            jungian_12 = ["Innocent","Orphan","Hero","Caregiver","Explorer",
+                          "Rebel","Lover","Creator","Jester","Sage","Magician","Ruler"]
+            probs = [e / total for e in exps]
+            top3 = sorted(range(12), key=lambda i: probs[i], reverse=True)[:3]
+            self.archetype_probs = [{"name": jungian_12[i], "prob": round(probs[i], 3)} for i in top3]
+        except Exception as e:
+            log.warning(f"Confidence calc failed: {e}")
 
-        # Lesson 06: top-3 archetype probabilities
-        jungian_12 = ["Innocent","Orphan","Hero","Caregiver","Explorer",
-                      "Rebel","Lover","Creator","Jester","Sage","Magician","Ruler"]
-        probs_12 = [e / total for e in exps]
-        top3_idx = sorted(range(len(probs_12)), key=lambda i: probs_12[i], reverse=True)[:3]
-        self.archetype_probs = [
-            {"name": jungian_12[i], "prob": round(probs_12[i], 3)}
-            for i in top3_idx
-        ]
+        # Rarity odds + evolution
+        try:
+            from terramon.domain.rarity import classify_rarity
+            self.rarity_odds = classify_rarity(text).probabilities
+            from terramon.domain.creature_agent import CreatureAgent
+            from terramon.domain.insight import Insight
+            _tmp = CreatureAgent(
+                agent_id="tmp", archetype=self.agent,
+                insight=Insight(driver="", barrier="", therefore="", archetype=self.agent),
+                level=self.level, xp=self.xp,
+                total_xp_earned=self.xp + (self.level - 1) * 100,
+            )
+            _tmp.can_evolve
+            self.agent_evolution_prob = _tmp.evolution_probability
+        except Exception as e:
+            log.warning(f"Rarity/evolve failed: {e}")
 
-        # Lesson 06: rarity odds (Dirichlet distribution)
-        from terramon.domain.rarity import classify_rarity
-        rarity_result = classify_rarity(text)
-        self.rarity_odds = rarity_result.probabilities
+        # Reload terra
+        try:
+            seeds = _MEMORY.load_all_seeds()
+            self.terra = [_seed_to_card(s) for s in seeds]
+        except Exception as e:
+            log.warning(f"Terra reload failed: {e}")
 
-        # Lesson 06: evolution probability (logistic)
-        from terramon.domain.creature_agent import CreatureAgent
-        from terramon.domain.insight import Insight
-        _tmp_agent = CreatureAgent(
-            agent_id="tmp", archetype=self.agent,
-            insight=Insight(driver="", barrier="", therefore="",
-                           archetype=self.agent),
-            level=self.level, xp=self.xp,
-            total_xp_earned=self.xp + (self.level - 1) * 100,
-        )
-        _tmp_agent.can_evolve  # triggers logistic computation
-        self.agent_evolution_prob = _tmp_agent.evolution_probability
-
-        # Reload terra (all persisted creatures).
-        seeds = _MEMORY.load_all_seeds()
-        self.terra = [_seed_to_card(s) for s in seeds]
-
-        # SIN 1: clear loading state after brief delay (simulates animation)
-        # In Reflex, the next event naturally re-renders with the card visible.
         self.summoning = False
 
         # Phase 2: FAL.ai creature portrait (background, silent fail)
         import threading
-        _portrait = self.agent_portrait
         _thought = text
         _agent = self.agent
         _rarity = self.rarity
@@ -360,12 +363,7 @@ class TerramonState(rx.State):
             try:
                 from terramon.application.portrait_gen import generate_portrait
                 p = generate_portrait(_thought, _agent, _rarity)
-                if p:
-                    # Can't set state from background thread,
-                    # but the portrait is saved for next load
-                    pass
-            except Exception:
-                pass
+            except: pass
         threading.Thread(target=_gen_portrait, daemon=True).start()
 
     @rx.event
