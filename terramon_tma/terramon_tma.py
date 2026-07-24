@@ -1257,7 +1257,6 @@ _CELEBRATION_STYLE = """
     100% { opacity: 0.3; transform: scale(1); }
 }
 """
-rx.style(_CELEBRATION_STYLE)
 
 
 def celebration_component() -> rx.Component:
@@ -1310,6 +1309,8 @@ def index() -> rx.Component:
     Three zones: TOP (creature), MIDDLE (stats+input), BOTTOM (nav).
     Like Pokémon Gold — all on one iPhone screen."""
     return rx.center(
+        # CSS animations injected via html style tag
+        rx.html(f"<style>{_CELEBRATION_STYLE}</style>"),
         # Tutorial overlay (first visit only, on top of everything)
         tutorial_overlay(),
         # Outer container: fixed height = 100vh, no overflow

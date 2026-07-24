@@ -5,9 +5,10 @@ SPA compiled from Python; the backend runs the summon domain logic in Python.
 """
 
 import reflex as rx
+from reflex_base.plugins.sitemap import SitemapPlugin
 
 config = rx.Config(
     app_name="terramon_tma",
     telemetry_enabled=False,
-    disable_plugins=["reflex_base.plugins.sitemap.SitemapPlugin"],
+    disable_plugins=[SitemapPlugin],
 )
