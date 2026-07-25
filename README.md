@@ -148,3 +148,10 @@ python -m pytest tests/
 > *"7 billion people. Billions of thoughts a day. Each one becomes a creature somewhere on this planet."*
 
 **Built with DeepSeek V4 Flash, Reflex, and Jungian psychology by indradev_ — AI Systems Architect**
+
+---
+
+<p align="center">
+  <sub>built by <a href="https://github.com/indrad3v4">indradev_</a> · 
+  <a href="https://buymeacoffee.com/indradev_">☕ support</a></sub>
+</p>
