@@ -192,6 +192,7 @@ class TerramonState(rx.State):
     # Phase 4 — economy & retention
     last_tick: str = ""  # ISO timestamp of last decay tick
     agent_portrait: str = ""  # FAL.ai generated portrait path
+    can_mint: bool = False  # Bayesian confidence gate for MINT
 
     # The player's terra: every creature that ever lived (persisted).
     terra: list[dict] = []
@@ -312,21 +313,28 @@ class TerramonState(rx.State):
         self.agent_energy = 80
         self.agent_happiness = 60
 
-        # Confidence + archetype probabilities
+        # Confidence + archetype probabilities (Bayesian — Lesson 07)
         try:
-            import math
-            scores = _scores(text)
-            max_score = max(scores)
-            exps = [math.exp(s - max_score) for s in scores]
-            total = sum(exps)
-            self.intelligence = round(max(e / total for e in exps) * 100)
-            jungian_12 = ["Innocent","Orphan","Hero","Caregiver","Explorer",
-                          "Rebel","Lover","Creator","Jester","Sage","Magician","Ruler"]
-            probs = [e / total for e in exps]
+            from terramon.application.bayes_router import (
+                load_belief, save_belief, bayes_forward, update_belief,
+                _ARCHETYPE_NAMES,
+            )
+            prior = load_belief()
+            bayes_winner, bayes_posterior, bayes_likelihood = bayes_forward(text, prior)
+            new_counts = update_belief(prior, bayes_winner)
+            save_belief(new_counts)
+            self.intelligence = round(bayes_posterior[bayes_winner] * 100)
+            probs = bayes_posterior
             top3 = sorted(range(12), key=lambda i: probs[i], reverse=True)[:3]
-            self.archetype_probs = [{"name": jungian_12[i], "prob": round(probs[i], 3)} for i in top3]
+            self.archetype_probs = [
+                {"name": _ARCHETYPE_NAMES[i], "prob": round(probs[i], 3)}
+                for i in top3
+            ]
+            # Revenue gate: only show MINT when Bayesian confidence > 50%
+            from terramon.application.bayes_router import should_gate_payment
+            self.can_mint = should_gate_payment(bayes_posterior, threshold=0.5)
         except Exception as e:
-            log.warning(f"Confidence calc failed: {e}")
+            log.warning(f"Bayesian confidence failed: {e}")
 
         # Rarity odds + evolution
         try:
@@ -747,18 +755,21 @@ def creature_card() -> rx.Component:
             # SIN 8: MINT with explanation tooltip
             rx.cond(
                 TerramonState.price_sats > 0,
-                rx.tooltip(
-                    rx.button(
-                        "⚡ MINT · " + TerramonState.price_sats.to_string() + " sats",
-                        on_click=TerramonState.mint_creature,
-                        background=TerramonState.color,
-                        color="#0b0b0f",
-                        width="100%",
-                        # SIN 7: mint button hover too
-                        _hover={"transform": "scale(1.02)", "opacity": "0.9"},
-                        style={"transition": "all 0.15s ease"},
+                rx.cond(
+                    TerramonState.can_mint,
+                    rx.tooltip(
+                        rx.button(
+                            "⚡ MINT · " + TerramonState.price_sats.to_string() + " sats",
+                            on_click=TerramonState.mint_creature,
+                            background=TerramonState.color,
+                            color="#0b0b0f",
+                            width="100%",
+                            _hover={"transform": "scale(1.02)", "opacity": "0.9"},
+                            style={"transition": "all 0.15s ease"},
+                        ),
+                        content="Mint this creature to Telegram Stars — tradable collectible on-chain",
                     ),
-                    content="Mint this creature to Telegram Stars — tradable collectible on-chain",
+                    rx.text("locked · train more", color="#6b7280", font_size="0.85em"),
                 ),
                 rx.text("free summon", color="#6b7280", font_size="0.85em"),
             ),

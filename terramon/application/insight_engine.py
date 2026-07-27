@@ -53,16 +53,16 @@ def encode(text: str) -> list[float]:
 
 
 def _scores(text: str) -> list[float]:
-    """Return theme scores (used by TMA for confidence computation).
+    """Return theme scores using Bayesian router (Lesson 07).
 
-    Delegates to k3_insight_engine's MoE router for the probability
-    distribution over 12 Jungian archetypes.
+    P(archetype | thought) ∝ P(thought | archetype) × P(archetype)
+
+    Likelihood = cosine similarity to archetype centroids.
+    Prior = uniform (default). Updated per-player via bayes_router.
     """
-    from terramon.application.k3_insight_engine import _get_net
-    net = _get_net()
-    encoded = encode(text)
-    _, probs, _ = net.forward(encoded)
-    return probs
+    from terramon.application.bayes_router import bayes_forward, _ARCHETYPE_NAMES
+    winner, posterior, likelihood = bayes_forward(text)
+    return posterior
 
 
 def extract_insight(raw_input: str,
