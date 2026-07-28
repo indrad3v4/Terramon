@@ -58,8 +58,10 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 COPY --from=builder /app /app
 
 # Ensure .web directory is writable by the non-root user
+# Also pre-create stateful_pages.json so Reflex doesn't try to create it at runtime
 RUN mkdir -p /app/data /app/.web/backend && \
-    chown -R terramon:terramon /app/data /app/.web
+    touch /app/.web/backend/stateful_pages.json && \
+    chown -R terramon:terramon /app/data /app/.web/backend/stateful_pages.json /app/.web
 
 # Switch to non-root user
 USER terramon
