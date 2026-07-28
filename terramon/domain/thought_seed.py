@@ -34,6 +34,11 @@ class ThoughtSeed:
     lon: float = 0.0
     place_name: str = ""  # e.g. "Kraków, Poland"
 
+    # I03: Embedding drift tracking — the first summon's embedding is stored
+    # as birth_embedding so we can measure how much the creature has evolved
+    # over time via cosine distance between birth and current embeddings.
+    birth_embedding: dict[int, float] | None = None
+
     @classmethod
     def make(
         cls,
@@ -47,6 +52,7 @@ class ThoughtSeed:
         lat: float = 0.0,
         lon: float = 0.0,
         place_name: str = "",
+        birth_embedding: dict[int, float] | None = None,
     ) -> "ThoughtSeed":
         return cls(
             raw_input=raw_input,
@@ -59,4 +65,5 @@ class ThoughtSeed:
             lat=lat,
             lon=lon,
             place_name=place_name,
+            birth_embedding=birth_embedding,
         )

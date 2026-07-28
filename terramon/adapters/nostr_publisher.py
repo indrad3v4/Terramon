@@ -20,11 +20,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import time
 from dataclasses import dataclass
 
 from terramon.ports.publish_port import PublishPort, PublishResult, ShareCard
+from terramon.events.agent_summoned import AgentSummoned
+
+log = logging.getLogger("terramon.nostr")
 
 # ----------------------------------------------------------------------------
 # secp256k1 field + curve constants
@@ -171,6 +175,53 @@ class NostrPublisher(PublishPort):
             except Exception:
                 failed.append(relay)
         return PublishResult(event_id=event["id"], relays_ok=ok, relays_failed=failed)
+
+    # ── EventBus wiring ────────────────────────────────────────────────
+
+    def on_agent_summoned(self, event: AgentSummoned) -> None:
+        """Handle an AgentSummoned event: convert to ShareCard and publish.
+
+        Gracefully no-ops when Nostr is unconfigured (no secret key set)
+        so missing env vars never crash the summon flow.
+        """
+        if not self.seckey_hex:
+            return  # graceful no-op when Nostr is not configured
+
+        lore = ""
+        if event.insight:
+            lore = (
+                f"[{event.insight.archetype}] "
+                f"{event.insight.driver} → "
+                f"{event.insight.barrier} → "
+                f"{event.insight.therefore}"
+            )
+
+        tags = ["terramon"]
+        if event.archetype:
+            tags.append(event.archetype.lower().replace(" ", "-"))
+        if event.geo_hint:
+            tags.append(event.geo_hint.lower().replace(" ", "-"))
+
+        card = ShareCard(
+            thought=event.thought_seed,
+            agent=event.agent_name,
+            rarity=event.rarity or "common",
+            lore=lore,
+            tags=tags,
+        )
+        try:
+            result = self.publish(card)
+            log.info(
+                "Nostr published AgentSummoned[%s] id=%s ok=%d failed=%d",
+                event.agent_name, result.event_id,
+                len(result.relays_ok), len(result.relays_failed),
+            )
+        except Exception:
+            log.exception("Nostr publish failed for AgentSummoned[%s]", event.agent_name)
+
+    def subscribe(self, bus) -> None:
+        """Register the AgentSummoned handler on an EventBus."""
+        bus.subscribe(AgentSummoned, self.on_agent_summoned)
 
 
 def _websocket_send(relay: str, frame: str) -> None:

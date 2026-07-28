@@ -187,12 +187,14 @@ def test_play_session_reaches_goal(tmp_path):
         bus=EventBus(),
         clock=lambda: "2026-07-18T00:00:00Z",
     )
-    loop = GameLoop(svc, PlayerProgress(goal_distinct=3))
+    loop = GameLoop(svc, PlayerProgress())  # default: Tamer tier needs 5 distinct
     thoughts = [
         "I trust that this is right",       # → Innocent
         "nobody understands me",            # → Orphan
         "I will overcome this",             # → Hero
         "rules are meant to be broken",     # → Rebel
+        "why is there a universe",          # → Sage
+        "let me create something new",      # → Creator (safety margin)
     ]
     reached = False
     for t in thoughts:
@@ -201,4 +203,4 @@ def test_play_session_reaches_goal(tmp_path):
             reached = True
             break
     assert reached, f"goal not reached; collection={loop.progress.collection}"
-    assert loop.progress.distinct_count >= 3
+    assert loop.progress.distinct_count >= 5

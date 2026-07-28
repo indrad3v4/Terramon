@@ -26,7 +26,12 @@ import time
 import urllib.request
 from typing import Optional
 
+from terramon.application.circuit_breaker import CircuitBreaker
 from terramon.domain.creature_agent import CreatureAgent, AgentMessage, MessageEntry
+from terramon.domain.insight import GeoContext
+
+# Module-level circuit breaker for all LLM API calls (OpenRouter + HuggingFace)
+_llm_circuit_breaker = CircuitBreaker(max_failures=3, cooldown=60.0, name="LLM")
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -261,6 +266,31 @@ def _build_attention_context(agent: CreatureAgent) -> str:
         if insight.nuance:
             memory += f"Nuance: {insight.nuance}\n"
         sections.append(memory)
+
+    # ── Channel E: Shared Memories (Lens #84 Friendship) ────────────
+    if agent.milestone_memory:
+        mem_block = "[ATTN:MEMORIES]\n"
+        mem_block += "Shared moments you remember:\n"
+        for m in agent.milestone_memory[-5:]:  # last 5
+            mem_block += f"  • {m}\n"
+        sections.append(mem_block)
+
+    # ── Channel F: Journey Phase (Lens #68 Hero's Journey) ──────────
+    phase_block = (
+        f"[ATTN:JOURNEY]\n"
+        f"Your journey phase: {agent.journey_phase}\n"
+        f"Bond level: {agent.bond_level}\n"
+    )
+    sections.append(phase_block)
+
+    # ── Channel G: Player Journal (Lens #85 Expression) ────────────
+    if agent.player_journal:
+        journal_block = (
+            f"[ATTN:JOURNAL]\n"
+            f"The player has written in their journal:\n"
+            f"'{agent.player_journal[:200]}'\n"
+        )
+        sections.append(journal_block)
 
     return "\n".join(sections)
 
@@ -530,7 +560,13 @@ def _call_with_retry(
     delays: list[float] = None,
     **kwargs,
 ) -> Optional[str]:
-    """Call an LLM function with exponential backoff retry.
+    """Call an LLM function with exponential backoff retry + circuit breaker.
+
+    Circuit breaker behaviour:
+      - If the circuit is OPEN (3 consecutive failures, 60s cooldown),
+        returns None immediately without calling the API.
+      - Each failed retry chain increments the failure counter.
+      - A successful call resets the counter and closes the circuit (CLOSED).
 
     Args:
         call_fn: The function to call (e.g. _call_llm or _call_huggingface)
@@ -540,8 +576,13 @@ def _call_with_retry(
         *args, **kwargs: Passed through to call_fn
 
     Returns:
-        The LLM response string, or None if all attempts failed.
+        The LLM response string, or None if all attempts failed or circuit is OPEN.
     """
+    # ── Circuit breaker fast-fail ────────────────────────────────────
+    if not _llm_circuit_breaker.is_available:
+        print("[LLM] Circuit breaker OPEN — skipping LLM call (fast-fail)")
+        return None
+
     if delays is None:
         delays = [2, 4]
 
@@ -549,6 +590,8 @@ def _call_with_retry(
     for attempt in range(max_attempts):
         result = call_fn(*args, **kwargs)
         if result is not None:
+            # Success — reset circuit breaker
+            _llm_circuit_breaker.on_success()
             return result
         last_result = result
         if attempt < len(delays):
@@ -556,6 +599,8 @@ def _call_with_retry(
             print(f"[LLM] Retrying in {wait}s (attempt {attempt + 1}/{max_attempts})...")
             time.sleep(wait)
 
+    # All attempts failed — notify circuit breaker
+    _llm_circuit_breaker.on_failure()
     return last_result
 
 
@@ -763,6 +808,110 @@ CreatureAgent.play = _patched_play
 CreatureAgent.rest = _patched_rest
 CreatureAgent.evolve = _patched_evolve
 CreatureAgent.tick = _patched_tick
+
+
+# ---------------------------------------------------------------------------
+# P1-T02: Unique THEREFORE from embedding (not 1 of 12 templates)
+# ---------------------------------------------------------------------------
+
+def embedding_to_features(embedding: dict[int, float], top_n: int = 10) -> str:
+    """Convert a 512-dim sparse embedding into a human-readable feature string.
+
+    Extracts the top-N active dimensions by absolute weight so an LLM
+    can generate a unique THEREFORE from the embedding's distinctive
+    signature. Each dimension is a hashed TF-IDF bucket; the magnitude
+    and sign indicate how strongly a conceptual feature fired.
+    """
+    if not embedding:
+        return "no distinctive features"
+    sorted_features = sorted(
+        embedding.items(), key=lambda x: abs(x[1]), reverse=True
+    )
+    top = sorted_features[:top_n]
+    features = [f"dim {k}: {v:.4f}" for k, v in top]
+    return "; ".join(features)
+
+
+def generate_llm_therefore(
+    embedding: dict[int, float],
+    archetype: str,
+    geo: Optional[GeoContext] = None,
+) -> Optional[str]:
+    """Generate a unique THEREFORE from the embedding's distinctive features.
+
+    Uses the LLM to synthesize a behavior directive that references
+    something unique about the embedding vector, rather than returning
+    one of the 12 hardcoded archetype templates.
+
+    Returns None if LLM is unavailable — caller falls back to template.
+    """
+    if not has_api_key():
+        return None
+
+    features = embedding_to_features(embedding)
+    geo_context = ""
+    if geo and geo.place_name:
+        geo_context = (
+            f"\nGeographic anchor: {geo.place_name} "
+            f"(lat={geo.lat:.4f}, lon={geo.lon:.4f})"
+        )
+
+    prompt = (
+        f"You are a creative writer for a creature-raising game called Terramon.\n"
+        f"A new creature was just born from a player's thought. Its identity is\n"
+        f"encoded in a unique 512-dim embedding vector.\n"
+        f"\n"
+        f"Archetype: {archetype}\n"
+        f"{geo_context}\n"
+        f"\n"
+        f"The creature's embedding has these most active signal dimensions:\n"
+        f"{features}\n"
+        f"\n"
+        f"Based on these distinctive signal dimensions and the archetype, write\n"
+        f"ONE short behavior directive (THEREFORE). This is what the creature\n"
+        f"DOES in response to the player's hidden need.\n"
+        f"\n"
+        f"Rules:\n"
+        f"- Reference something from the embedding signals, not generic archetype\n"
+        f"- One sentence, 8-20 words, present tense, vivid imagery\n"
+        f"- Do NOT use the archetype name or clichés from the archetype template\n"
+        f"\n"
+        f"Output only the THEREFORE sentence, nothing else."
+    )
+
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You generate unique creature behavior directives from embedding "
+                "signatures. Output only the one-sentence THEREFORE."
+            ),
+        },
+        {"role": "user", "content": prompt},
+    ]
+
+    raw = _call_llm(
+        messages,
+        model=_DEFAULT_MODEL,
+        sampling={"temperature": 0.9, "top_p": 0.95},
+        max_tokens=60,
+    )
+    if not raw:
+        return None
+
+    # Clean up the response
+    text = raw.strip().strip('"').strip("'")
+    # Remove markdown bold/italic
+    text = text.replace("**", "").replace("*", "")
+    # Ensure it's a complete sentence
+    text = text.strip()
+    if not text:
+        return None
+    text = text[0].upper() + text[1:]
+    if not text.endswith("."):
+        text += "."
+
+    return text
 
 
 # ---------------------------------------------------------------------------

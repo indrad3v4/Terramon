@@ -48,6 +48,7 @@ from terramon.adapters.text_preprocessing import (
     is_valid_token,
     preprocess_for_classifier,
 )
+from terramon.domain.insight import GeoContext
 from terramon.ports.classifier_port import ClassifierPort
 
 DIM = 512  # hashed feature space width
@@ -95,13 +96,22 @@ def _hash(token: str) -> int:
     return int.from_bytes(digest, "big") % DIM
 
 
-def _encode(text: str, idf: dict[int, float] | None = None) -> dict[int, float]:
+def _encode(text: str,
+            idf: dict[int, float] | None = None,
+            geo: GeoContext | None = None) -> dict[int, float]:
     """Text -> L2-normalized sparse TF-IDF vector (dict bucket->weight).
 
     When *idf* is provided, tokens are encoded with sublinear TF scaling
     (1 + log(tf)) × smooth IDF (log(N/df) + 1). Stop words are removed
     during TF-IDF encoding to reduce noise. Without *idf*, behaves as plain
     TF with all tokens (backward-compatible for non-TF-IDF encoding).
+
+    When *geo* is provided and non-zero (lat != 0 or lon != 0), geo-derived
+    features are encoded as additional dimensions in the same hashed space:
+    climate zone, continent, urban/rural flag, and place_name tokens. These
+    are added to the vector BEFORE L2 normalization, so they shift the
+    direction. When no geo is available (geo=None or lat=0,lon=0), the
+    encoding is unchanged (backward compatible).
 
     Phase 5 enhancements (TF-IDF++):
       - Sublinear TF: 1 + log(raw_tf) reduces the impact of very frequent terms.
@@ -127,6 +137,67 @@ def _encode(text: str, idf: dict[int, float] | None = None) -> dict[int, float]:
         # Plain TF (backward-compatible: no IDF, no sublinear, no stop word removal)
         vec = defaultdict(float)
         for tok in tokens:
+            h = _hash(tok)
+            vec[h] += 1.0
+
+    # --- GEO MODIFIER: add geo-derived features to the vector ---
+    # Only apply when geo is present and has meaningful coordinates
+    if geo is not None and (geo.lat != 0.0 or geo.lon != 0.0):
+        geo_tokens: list[str] = []
+
+        # 1. Climate zone — derived from absolute latitude
+        abs_lat = abs(geo.lat)
+        if abs_lat >= 66.5:
+            climate = "polar"
+        elif abs_lat >= 55.0:
+            climate = "subpolar"
+        elif abs_lat >= 35.0:
+            climate = "temperate"
+        elif abs_lat >= 23.5:
+            climate = "subtropical"
+        else:
+            climate = "tropical"
+        geo_tokens.append(f"geo_climate_{climate}")
+
+        # 2. Continent — derived from lat/lon bounding boxes
+        lat, lon = geo.lat, geo.lon
+        if lat < -60:
+            continent = "antarctica"
+        elif -35 <= lat <= 37 and -20 <= lon <= 55:
+            continent = "africa"
+        elif 36 <= lat <= 70 and -10 <= lon <= 40:
+            continent = "europe"
+        elif 25 <= lat <= 72 and -170 <= lon <= -50:
+            continent = "north_america"
+        elif -55 <= lat <= 12 and -80 <= lon <= -35:
+            continent = "south_america"
+        elif -40 <= lat <= 40 and 55 <= lon <= 150:
+            continent = "asia"
+        elif -40 <= lat <= -20 and 110 <= lon <= 180:
+            continent = "australia_oceania"
+        else:
+            continent = "unknown"
+        geo_tokens.append(f"geo_continent_{continent}")
+
+        # 3. Urban/rural heuristic — presence of city-like structure in place_name
+        is_urban = 0
+        if geo.place_name:
+            pn_lower = geo.place_name.lower()
+            # Comma-separated "City, Region/Country" indicates urban location
+            if "," in pn_lower or "city" in pn_lower or "town" in pn_lower:
+                is_urban = 1
+            elif len(geo.place_name.split()) >= 2:
+                is_urban = 1
+        geo_tokens.append(f"geo_urban_{is_urban}")
+
+        # 4. Place_name words encoded through the same hashing trick
+        if geo.place_name:
+            place_tokens = _tokens(geo.place_name, remove_stop_words=True)
+            for tok in place_tokens:
+                geo_tokens.append(f"geo_place_{tok}")
+
+        # Add all geo feature tokens to the vector (same hashing trick)
+        for tok in geo_tokens:
             h = _hash(tok)
             vec[h] += 1.0
 
@@ -283,6 +354,13 @@ class EmbeddingClassifier(ClassifierPort):
     # pattern, not shower thoughts. The 512-dim embedding space still captures
     # unique nuance within each archetype (C option: start with Jung, expand
     # with continuous embedding).
+    #
+    # v4 (Lens #44 Character): expanded from 5 → 10 example sentences per
+    # archetype, including a SHADOW trait (the dark side of each archetype).
+    # Real characters have contradictions: the Innocent is also naive, the
+    # Hero is also arrogant. Including shadow phrases in the training set
+    # means the classifier captures the FULL character, not just the bright
+    # side. This makes creatures feel like real personalities, not labels.
     ARCHETYPES: dict[str, list[str]] = {
         "Innocent": [
             "i just want to be safe",
@@ -290,6 +368,12 @@ class EmbeddingClassifier(ClassifierPort):
             "i trust that this is right",
             "keep me from harm",
             "i believe in the good of people",
+            # Shadow: naive, dependent, in denial
+            "i don't want to know the ugly truth",
+            "just tell me it's fine even if it isn't",
+            "i can't handle this on my own",
+            "please make the scary thing go away",
+            "i pretend everything is fine because reality hurts",
         ],
         "Orphan": [
             "i don't belong anywhere",
@@ -297,6 +381,12 @@ class EmbeddingClassifier(ClassifierPort):
             "we are all in this together",
             "i just want to fit in",
             "why am i always left out",
+            # Shadow: resentful, self-pitying, envious
+            "everyone else has what i don't",
+            "fine i'll do it alone like always",
+            "you don't really care you're just pretending",
+            "i hate how happy they look without me",
+            "nobody ever stays so why start now",
         ],
         "Hero": [
             "i will overcome this",
@@ -304,6 +394,12 @@ class EmbeddingClassifier(ClassifierPort):
             "i have to be strong",
             "face the challenge head on",
             "this is my trial to overcome",
+            # Shadow: arrogant, reckless, can't ask for help
+            "i don't need anyone i've got this",
+            "if i can't do it nobody can",
+            "weakness is not an option",
+            "i'll prove them all wrong no matter the cost",
+            "asking for help is for people who aren't me",
         ],
         "Caregiver": [
             "let me help you",
@@ -311,6 +407,12 @@ class EmbeddingClassifier(ClassifierPort):
             "your pain matters to me",
             "i give because i care",
             "protect the vulnerable",
+            # Shadow: martyr, controlling, burnt out
+            "if i stop giving who am i even",
+            "i give so much and nobody gives back",
+            "you need me whether you know it or not",
+            "i can't say no even when i'm empty",
+            "i'll fix you even if you didn't ask",
         ],
         "Explorer": [
             "i want to see what's out there",
@@ -318,6 +420,12 @@ class EmbeddingClassifier(ClassifierPort):
             "the road is calling me",
             "i need to find my own path",
             "freedom is everything",
+            # Shadow: restless, commitment-phobic, rootless
+            "the moment it gets familiar i want to leave",
+            "staying in one place feels like dying",
+            "i left because i was scared of staying",
+            "every door i walk through i'm already eyeing the exit",
+            "roots feel like chains to me",
         ],
         "Rebel": [
             "rules are meant to be broken",
@@ -325,6 +433,12 @@ class EmbeddingClassifier(ClassifierPort):
             "tear it all down",
             "they can't tell me what to do",
             "revolution starts now",
+            # Shadow: destructive, contrarian, burns bridges
+            "i'll destroy everything before they can take it from me",
+            "i say no just to see them squirm",
+            "burn it all there's nothing worth saving",
+            "if you're not angry you're not paying attention",
+            "i broke it because it deserved to break",
         ],
         "Lover": [
             "i want to be close to you",
@@ -332,6 +446,12 @@ class EmbeddingClassifier(ClassifierPort):
             "i give you my whole heart",
             "being with you is enough",
             "i crave connection and intimacy",
+            # Shadow: codependent, jealous, loses self in others
+            "if you leave i will fall apart",
+            "i need you to need me back",
+            "who am i when you're not here",
+            "i saw you with them and it ruined my whole day",
+            "i love you so much it scares me and you",
         ],
         "Creator": [
             "i will build something new",
@@ -339,6 +459,12 @@ class EmbeddingClassifier(ClassifierPort):
             "my imagination is limitless",
             "create what has never been seen",
             "art is how i breathe",
+            # Shadow: perfectionist, never satisfied, burns out
+            "it's not good enough it's never good enough",
+            "i started ten projects and finished zero",
+            "if i can't make it perfect why bother",
+            "i poured everything into this and nobody noticed",
+            "the blank page terrifies me more than anything",
         ],
         "Jester": [
             "life is a joke enjoy it",
@@ -346,6 +472,12 @@ class EmbeddingClassifier(ClassifierPort):
             "don't take it so seriously",
             "joy in every moment",
             "laughter is the best medicine",
+            # Shadow: hides pain behind humor, avoids seriousness
+            "if i stop joking i'll have to feel it",
+            "laugh so you don't cry that's the motto",
+            "why be real when you can be funny",
+            "the moment gets heavy and i crack a joke to break it",
+            "they think i'm happy but i'm just loud",
         ],
         "Sage": [
             "the truth will set me free",
@@ -353,6 +485,12 @@ class EmbeddingClassifier(ClassifierPort):
             "knowledge is power",
             "let me understand why",
             "enlighten me with your wisdom",
+            # Shadow: know-it-all, detached, paralyzed by analysis
+            "i've read enough to know you're wrong",
+            "let me explain why your experience isn't valid",
+            "i understand everything and connect with nothing",
+            "analysis paralysis is my default state",
+            "knowing the answer is easier than living it",
         ],
         "Magician": [
             "transform this situation",
@@ -360,6 +498,12 @@ class EmbeddingClassifier(ClassifierPort):
             "believe and it will come",
             "the universe is on my side",
             "turn lead into gold",
+            # Shadow: manipulative, delusional, bypasses reality
+            "i can make them see what i want them to see",
+            "visualization is enough why would i actually do it",
+            "i don't need a plan i have faith",
+            "i'll bend the truth until it fits my narrative",
+            "spiritual bypass is my favorite avoidance strategy",
         ],
         "Ruler": [
             "take charge of this situation",
@@ -367,11 +511,22 @@ class EmbeddingClassifier(ClassifierPort):
             "lead the people",
             "order from chaos",
             "power and responsibility",
+            # Shadow: authoritarian, micromanaging, isolates in leadership
+            "if i don't control it it will fall apart",
+            "my way is the right way",
+            "trust is earned through obedience",
+            "i carry everything because nobody else can",
+            "leadership means nobody gets close enough to see me falter",
         ],
     }
 
     # Below this cosine, the input is too far from every archetype -> NB fallback.
-    MIN_CONFIDENCE = 0.05
+    # v2 (Lens #23 Emergence): raised from 0.05 to 0.15 so the Naive Bayes
+    # fallback actually fires for truly ambiguous inputs. This creates
+    # emergence: the same input classified differently by two different
+    # models (centroid cosine vs NB token likelihood), producing unexpected
+    # but valid archetype assignments that broaden the creature spectrum.
+    MIN_CONFIDENCE = 0.15
 
     def __init__(self) -> None:
         """Precompute IDF weights, prototypes, per-example vectors, and NB model."""
@@ -396,7 +551,7 @@ class EmbeddingClassifier(ClassifierPort):
         )
         self._nb_names = list(self.ARCHETYPES.keys())
 
-    def classify(self, thought_seed: str) -> str:
+    def classify(self, thought_seed: str, geo: GeoContext | None = None) -> str:
         """Return the archetype whose prototype is closest to the input.
 
         1. Compute cosine similarity to each archetype prototype.
@@ -405,8 +560,12 @@ class EmbeddingClassifier(ClassifierPort):
            second pass before defaulting to Innocent. This catches inputs
            that are semantically distant from all centroids but lexically
            similar to one archetype.
+
+        When *geo* is provided, the input is encoded with geo-derived
+        features, so the same thought at different locations can produce
+        a different archetype.
         """
-        query = _encode(thought_seed, self._idf)
+        query = _encode(thought_seed, self._idf, geo=geo)
         if not query:
             return self.DEFAULT_AGENT
 
@@ -430,7 +589,7 @@ class EmbeddingClassifier(ClassifierPort):
         )
 
     def scores(
-        self, thought_seed: str, k: int = TOP_K
+        self, thought_seed: str, k: int = TOP_K, geo: GeoContext | None = None
     ) -> dict[str, float]:
         """Expose per-archetype similarity scores (for eval/debug/transparency).
 
@@ -440,8 +599,12 @@ class EmbeddingClassifier(ClassifierPort):
         comparison.
 
         When k=1, falls back to single nearest-centroid (classic behavior).
+
+        When *geo* is provided, the input is encoded with geo-derived
+        features, so the same thought at different locations produces
+        different score distributions.
         """
-        query = _encode(thought_seed, self._idf)
+        query = _encode(thought_seed, self._idf, geo=geo)
         if not query:
             return {name: 0.0 for name in self._prototypes}
 

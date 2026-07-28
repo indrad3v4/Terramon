@@ -31,6 +31,7 @@ from typing import Optional
 
 from terramon.domain.insight import Insight
 from terramon.application.math_utils import sigmoid
+from terramon.domain.progress import Squad
 
 
 # ---------------------------------------------------------------------------
@@ -52,12 +53,65 @@ MAX_DELTA_PER_TICK = 15
 # Phase 6: State history window for mood computation
 MOOD_HISTORY_LENGTH = 10
 
-# Tick decay rates — Phase 6 state machine (per-state additive deltas on top of EMA)
-DECAY_HUNGER = 5      # legacy linear decay (kept for reference; replaced by EMA + state machine)
-DECAY_ENERGY = 3
-DECAY_HAPPINESS = 2
+# ---------------------------------------------------------------------------
+# Archetype-specific starting stats and decay modifiers
+# ---------------------------------------------------------------------------
 
-# Interaction deltas
+_ARCHETYPE_STATS = {
+    "Hero":      {"hunger": 70, "energy": 90, "happiness": 60},
+    "Caregiver": {"hunger": 60, "energy": 70, "happiness": 80},
+    "Orphan":    {"hunger": 80, "energy": 60, "happiness": 40},
+    "Sage":      {"hunger": 50, "energy": 80, "happiness": 70},
+    "Rebel":     {"hunger": 90, "energy": 85, "happiness": 50},
+    "Lover":     {"hunger": 60, "energy": 60, "happiness": 90},
+    "Explorer":  {"hunger": 70, "energy": 75, "happiness": 65},
+    "Creator":   {"hunger": 65, "energy": 70, "happiness": 75},
+    "Jester":    {"hunger": 85, "energy": 80, "happiness": 80},
+    "Innocent":  {"hunger": 75, "energy": 75, "happiness": 85},
+    "Magician":  {"hunger": 55, "energy": 65, "happiness": 70},
+    "Ruler":     {"hunger": 60, "energy": 85, "happiness": 55},
+}
+
+# Per-archetype decay rate modifiers applied on top of EMA DECAY_FACTOR.
+# Modifier scales the LOSS rate (1 - DECAY_FACTOR):
+#   > 1.0 = faster decay (more stat lost per tick)
+#   < 1.0 = slower decay (less stat lost per tick)
+#   = 1.0 = standard EMA decay (default).
+# Effective factor = 1 - (1 - DECAY_FACTOR) * modifier
+_ARCHETYPE_DECAY = {
+    "Hero":      {"hunger": 1.0, "energy": 1.3, "happiness": 1.0},
+    "Caregiver": {"hunger": 1.0, "energy": 1.0, "happiness": 0.8},
+    "Orphan":    {"hunger": 1.2, "energy": 1.0, "happiness": 1.3},
+    "Sage":      {"hunger": 1.0, "energy": 0.8, "happiness": 1.0},
+    "Rebel":     {"hunger": 1.3, "energy": 1.2, "happiness": 1.0},
+    "Lover":     {"hunger": 1.0, "energy": 1.0, "happiness": 0.7},
+    "Explorer":  {"hunger": 1.0, "energy": 1.2, "happiness": 1.0},
+    "Creator":   {"hunger": 1.0, "energy": 1.0, "happiness": 0.9},
+    "Jester":    {"hunger": 1.2, "energy": 1.0, "happiness": 0.8},
+    "Innocent":  {"hunger": 1.0, "energy": 1.0, "happiness": 0.7},
+    "Magician":  {"hunger": 1.0, "energy": 0.9, "happiness": 1.0},
+    "Ruler":     {"hunger": 0.8, "energy": 1.0, "happiness": 1.2},
+}
+
+# Per-archetype evolution requirements.
+# Archetypes that need more growth (Hero, Ruler) have higher thresholds.
+# Archetypes that grow quickly (Innocent, Orphan) evolve sooner.
+_ARCHETYPE_EVOLUTION = {
+    "Hero":      {"min_level": 12, "min_happiness": 75, "min_xp_total": 600, "insight_diversity": 4},
+    "Caregiver": {"min_level": 10, "min_happiness": 80, "min_xp_total": 500, "insight_diversity": 3},
+    "Orphan":    {"min_level": 8,  "min_happiness": 65, "min_xp_total": 400, "insight_diversity": 2},
+    "Sage":      {"min_level": 8,  "min_happiness": 70, "min_xp_total": 450, "insight_diversity": 3},
+    "Rebel":     {"min_level": 11, "min_happiness": 70, "min_xp_total": 550, "insight_diversity": 3},
+    "Lover":     {"min_level": 9,  "min_happiness": 85, "min_xp_total": 450, "insight_diversity": 3},
+    "Explorer":  {"min_level": 10, "min_happiness": 70, "min_xp_total": 500, "insight_diversity": 4},
+    "Creator":   {"min_level": 9,  "min_happiness": 75, "min_xp_total": 500, "insight_diversity": 3},
+    "Jester":    {"min_level": 10, "min_happiness": 75, "min_xp_total": 500, "insight_diversity": 3},
+    "Innocent":  {"min_level": 7,  "min_happiness": 70, "min_xp_total": 350, "insight_diversity": 2},
+    "Magician":  {"min_level": 10, "min_happiness": 70, "min_xp_total": 500, "insight_diversity": 3},
+    "Ruler":     {"min_level": 12, "min_happiness": 70, "min_xp_total": 600, "insight_diversity": 4},
+}
+
+# Interaction deltas — base values (before state modifiers)
 FEED_HUNGER = +25
 FEED_ENERGY = +5
 FEED_XP = +3
@@ -71,7 +125,6 @@ REST_HUNGER = +3      # resting makes you a bit hungry
 
 TALK_HAPPINESS = +5
 TALK_XP = +2
-
 
 # ---------------------------------------------------------------------------
 # Phase 6: State machine types
@@ -89,6 +142,7 @@ class CreatureState(Enum):
     TIRED = "tired"       # Energy < 30 — accelerated energy decay
     EVOLVING = "evolving" # Evolution-ready — slightly boosted happiness
     SICK = "sick"         # Any stat < 10 — accelerated decay across all stats
+    DORMANT = "dormant"   # LENS #18: No stat has been >0 for too many ticks — creature retreats
 
 
 @dataclass
@@ -117,6 +171,7 @@ STATE_DECAY = {
     CreatureState.TIRED:     {"hunger": 0, "energy": 2, "happiness": 0},
     CreatureState.EVOLVING:  {"hunger": 0, "energy": 0, "happiness": -1},  # happiness bonus
     CreatureState.SICK:      {"hunger": 2, "energy": 2, "happiness": 2},
+    CreatureState.DORMANT:   {"hunger": 0, "energy": 0, "happiness": 0},  # frozen — no decay
 }
 
 # Phase 6: Day/night modifiers for additive decay rates
@@ -129,6 +184,33 @@ DAY_PHASE_MOD = {
     "evening":   {"hunger": 1.0, "energy": 1.0, "happiness": 1.0},
     "night":     {"hunger": 1.0, "energy": 1.5, "happiness": 0.3},
 }
+
+# LENS #3: State-dependent interaction modifiers.
+# When creature is already in a good state for that action, the effect is amplified.
+# When in a poor state, it's reduced — creating strategic choice.
+STATE_MOD = {
+    "feed": {
+        CreatureState.HUNGRY: 1.5,   # feeding when hungry = 50% more effective
+        CreatureState.HAPPY: 0.8,    # feeding when full = wasteful
+        CreatureState.SICK: 0.5,     # sick = barely eats
+    },
+    "play": {
+        CreatureState.HAPPY: 1.3,    # play when happy = more joy
+        CreatureState.TIRED: 0.6,    # play when tired = less fun
+        CreatureState.HUNGRY: 0.7,   # hungry = distracted
+    },
+    "rest": {
+        CreatureState.TIRED: 1.5,    # rest when tired = recovers more
+        CreatureState.HAPPY: 0.8,    # not tired = rest is boring
+    },
+    "talk": {
+        CreatureState.HAPPY: 1.2,    # happy = more responsive
+        CreatureState.SICK: 1.8,     # talk when sick = comfort amplifies
+    },
+}
+
+# LENS #18: After 24 consecutive ticks at 0 in any stat, creature goes dormant.
+DORMANT_TICK_THRESHOLD = 24
 
 
 @dataclass
@@ -211,6 +293,66 @@ class CreatureAgent:
     state: CreatureState = CreatureState.HAPPY
     state_history: list[StateSnapshot] = field(default_factory=list)
     mood: str = "content"
+    dormant_ticks: int = 0
+
+    # ── Lens #65/#75: Avatar agency & story machine ───────────────────
+    player_affinity: list[float] = field(default_factory=lambda: [0.0] * 12)
+    journey_phase: str = "call"  # call | threshold | transformation | return
+
+    # ── Lens #84/#88: Friendship & love ───────────────────────────────
+    bond_level: int = 0
+    milestone_memory: list[str] = field(default_factory=list)
+
+    # ── Lens #73: Grace / absence tracking ────────────────────────────
+    ticks_without_interaction: int = 0
+
+    # ── Lens #85: Player expression ───────────────────────────────────
+    player_journal: str = ""
+
+    # ── Lens #86: Community seed ──────────────────────────────────────
+    share_code: str = ""
+
+    # ── I04: Squad resonance reference ───────────────────────────────
+    squad: Optional[Squad] = None
+
+    @property
+    def resonance_bonus_stats(self) -> dict[str, int]:
+        """Return base stats with squad resonance bonuses applied.
+
+        If the creature is part of a squad, active resonance bonuses
+        are added to the base stats. Bonuses are clamped at MAX values.
+        """
+        stats = {
+            "hunger": self.hunger,
+            "energy": self.energy,
+            "happiness": self.happiness,
+        }
+        if self.squad is not None:
+            bonuses = self.squad.total_stat_bonus()
+            stats["hunger"] = min(MAX_HUNGER, stats["hunger"] + bonuses.get("hunger", 0))
+            stats["energy"] = min(MAX_ENERGY, stats["energy"] + bonuses.get("energy", 0))
+            stats["happiness"] = min(MAX_HAPPINESS, stats["happiness"] + bonuses.get("happiness", 0))
+        return stats
+
+    def __post_init__(self) -> None:
+        """Apply archetype-specific starting stats and evolution requirements.
+
+        If archetype is not found in the lookup dicts, defaults (80/80/60,
+        EvolutionRequirement with min_level=10) are preserved for backward compat.
+        """
+        archetype_cap = self.archetype.capitalize()
+
+        # Apply per-archetype starting stats
+        stats = _ARCHETYPE_STATS.get(archetype_cap)
+        if stats:
+            self.hunger = stats["hunger"]
+            self.energy = stats["energy"]
+            self.happiness = stats["happiness"]
+
+        # Apply per-archetype evolution requirements
+        evo = _ARCHETYPE_EVOLUTION.get(archetype_cap)
+        if evo:
+            self.evolution_requirement = EvolutionRequirement(**evo)
 
     @property
     def xp_into_level(self) -> int:
@@ -230,61 +372,147 @@ class CreatureAgent:
 
     # -- Interaction methods --
 
+    def _state_mod(self, action: str, base: int) -> int:
+        """Apply state-dependent modifier to an interaction stat change (LENS #3)."""
+        mod = STATE_MOD.get(action, {}).get(self.state, 1.0)
+        return max(1, int(base * mod))
+
     def feed(self) -> AgentMessage:
-        """Feed the creature — increases hunger, small XP."""
-        self.hunger = min(MAX_HUNGER, self.hunger + FEED_HUNGER)
-        self.energy = min(MAX_ENERGY, self.energy + FEED_ENERGY)
-        self._award_xp(FEED_XP)
+        """Feed the creature — increases hunger, small XP. LENS #3: state-modulated."""
+        self.hunger = min(MAX_HUNGER, self.hunger + self._state_mod("feed", FEED_HUNGER))
+        self.energy = min(MAX_ENERGY, self.energy + self._state_mod("feed", FEED_ENERGY))
+        self._award_xp(self._state_mod("feed", FEED_XP))
         self.last_interaction_type = "feed"
         self.interaction_count += 1
-        texts = [
-            "Munch munch... that hit the spot.",
-            "You offer a thought-nugget. The creature accepts gratefully.",
-            "It nibbles slowly, savouring the moment.",
-            f"'{self._archetype_verb()}.' It feeds on your attention.",
-        ]
-        return self._make_message(random.choice(texts), "response", 3)
+        self.bond_level += 1
+        self.ticks_without_interaction = 0  # Lens #73: reset absence counter
+        self._update_journey_phase()          # Lens #68
+        self._affinity_shift("feed")          # Lens #75
+        self._record_milestone(f"Interaction #{self.interaction_count}: feed")
+        # LENS #19: Parametric responses — reference level, interaction count, state
+        if self.state == CreatureState.HUNGRY:
+            texts = [
+                f"Devours the thought-nugget! (Lv.{self.level} — so hungry!)",
+                "Thank you... I needed that. You came just in time.",
+                f"It gulps eagerly, its {self._archetype_verb()} hunger showing.",
+                "The glow returns to its eyes. It nuzzles your hand.",
+            ]
+        elif self.state == CreatureState.SICK:
+            texts = [
+                f"Takes a tiny bite. '{self._archetype_verb()}...' it whispers. (Lv.{self.level})",
+                "It struggles to eat but tries, for you.",
+                "Every nibble is effort. But it trusts you.",
+            ]
+        else:
+            texts = [
+                f"Munch munch... that hit the spot. (Lv.{self.level}, {self.interaction_count} interactions)",
+                "You offer a thought-nugget. The creature accepts gratefully.",
+                "It nibbles slowly, savouring the moment.",
+                f"'{self._archetype_verb()}.' It feeds on your attention.",
+            ]
+        msg = self._make_message(random.choice(texts), "response", 3)
+        # Lens #88: Check for bond milestone gift
+        bond = self._check_bond_milestones()
+        return bond if bond else msg
 
     def play(self) -> AgentMessage:
-        """Play with the creature — increases happiness, costs energy."""
+        """Play with the creature — increases happiness, costs energy. LENS #3: state-modulated."""
         if self.energy < 20:
             return self._make_message(
                 f"Too tired to play. It curls up and sighs.",
                 "response", 7
             )
-        self.happiness = min(MAX_HAPPINESS, self.happiness + PLAY_HAPPINESS)
-        self.energy = max(0, self.energy + PLAY_ENERGY)
-        self._award_xp(PLAY_XP)
+        self.happiness = min(MAX_HAPPINESS, self.happiness + self._state_mod("play", PLAY_HAPPINESS))
+        self.energy = max(0, self.energy + self._state_mod("play", PLAY_ENERGY))  # PLAY_ENERGY is -15
+        self._award_xp(self._state_mod("play", PLAY_XP))
         self.last_interaction_type = "play"
         self.interaction_count += 1
-        texts = [
+        self.bond_level += 1
+        self.ticks_without_interaction = 0  # Lens #73
+        self._update_journey_phase()          # Lens #68
+        self._affinity_shift("play")          # Lens #75
+        self._record_milestone(f"Interaction #{self.interaction_count}: play")
+        # LENS #19: Parametric play responses
+        if self.state == CreatureState.TIRED:
+            texts = [
+                f"Tries to play but yawns. 'So tiered...' (Lv.{self.level})",
+                "A half-hearted chase. It stumbles adorably.",
+                "It wants to play but its eyelids droop.",
+            ]
+        elif self.state == CreatureState.HAPPY:
+            texts = [
+                f"ZOOMIES! It races in excited circles! (Lv.{self.level})",
+                "Pure joy. It forgets everything except this moment.",
+                f"It {self._archetype_verb()} wildly, inviting you to join.",
+            ]
+        else:
+            texts = [
             "It darts around you in excited circles!",
             "A game of chase. You lose. It laughs without sound.",
             f"It {self._archetype_verb()} playfully, inviting you to follow.",
             "For a moment, the thought that birthed it feels light again.",
         ]
-        return self._make_message(random.choice(texts), "response", 3)
+        msg = self._make_message(random.choice(texts), "response", 3)
+        # Lens #88: Check for bond milestone gift
+        bond = self._check_bond_milestones()
+        return bond if bond else msg
 
     def rest(self) -> AgentMessage:
-        """Let the creature rest — restores energy."""
-        self.energy = min(MAX_ENERGY, self.energy + REST_ENERGY)
+        """Let the creature rest — restores energy. LENS #3: state-modulated."""
+        self.energy = min(MAX_ENERGY, self.energy + self._state_mod("rest", REST_ENERGY))
         self.hunger = max(0, self.hunger - REST_HUNGER)  # rest burns hunger
         self.last_interaction_type = "rest"
         self.interaction_count += 1
-        texts = [
+        self.bond_level += 1
+        self.ticks_without_interaction = 0  # Lens #73
+        self._update_journey_phase()          # Lens #68
+        self._affinity_shift("rest")          # Lens #75
+        self._record_milestone(f"Interaction #{self.interaction_count}: rest")
+        # LENS #19: Parametric rest responses
+        if self.state == CreatureState.TIRED:
+            texts = [
+                f"Collapses into a deep sleep. Soft purrs. (Lv.{self.level})",
+                "It curls up, finally at peace. The terra sighs with it.",
+                f"It rests heavily against you. '{self._archetype_verb()}...' it murmurs.",
+            ]
+        else:
+            texts = [
             "It settles into a warm glow and closes its eyes.",
             "Soft hum. Slow pulse. The creature dreams.",
             f"It rests near you. You feel its {self._archetype_feeling()}.",
             "Stillness. The terra breathes with you.",
         ]
-        return self._make_message(random.choice(texts), "response", 2)
+        msg = self._make_message(random.choice(texts), "response", 2)
+        # Lens #88: Check for bond milestone gift
+        bond = self._check_bond_milestones()
+        return bond if bond else msg
 
     def talk(self) -> AgentMessage:
-        """Talk to the creature — it responds based on its insight."""
-        self.happiness = min(MAX_HAPPINESS, self.happiness + TALK_HAPPINESS)
-        self._award_xp(TALK_XP)
+        """Talk to the creature — it responds based on its insight. LENS #3: state-modulated."""
+        self.happiness = min(MAX_HAPPINESS, self.happiness + self._state_mod("talk", TALK_HAPPINESS))
+        self._award_xp(self._state_mod("talk", TALK_XP))
         self.last_interaction_type = "talk"
         self.interaction_count += 1
+        self.bond_level += 1
+        self.ticks_without_interaction = 0  # Lens #73
+        self._update_journey_phase()          # Lens #68
+        self._affinity_shift("talk")          # Lens #75
+        self._record_milestone(f"Interaction #{self.interaction_count}: talk")
+
+        # Lens #73: Absence greeting — does the creature have a story to tell?
+        greeting = self._absence_greeting()
+        if greeting:
+            self._record_milestone("Player returned after absence — creature greeted them")
+            return self._make_message(greeting, "response", 4)
+
+        # Lens #84: Include a memory fragment for relationship depth
+        fragment = self._memory_fragment()
+        if fragment:
+            return self._make_message(
+                f"{self.insight.therefore if self.insight and self.insight.therefore else ''} "
+                f"(I remember: {fragment})",
+                "response", 1
+            )
 
         if self.insight and self.insight.therefore:
             return self._make_message(
@@ -314,6 +542,10 @@ class CreatureAgent:
         LLM-enhanced _patched_tick() call into. Think of it as the forward pass
         of one RNN time step: hidden_state[t] = f(hidden_state[t-1], input[t]).
 
+        Lens #73: Grace period — when the player hasn't interacted for >4 ticks,
+        the creature enters a "terra rest" state where decay halves. The creature
+        is not being punished for absence — it is conserving energy naturally.
+
         Args:
             day_phase: One of "morning", "afternoon", "evening", "night".
                        Auto-detects from time_tool if None.
@@ -323,6 +555,9 @@ class CreatureAgent:
             from tools.time_tool import get_day_phase
             day_phase = get_day_phase()
 
+        # ── Lens #73: Track consecutive ticks without player interaction ──
+        self.ticks_without_interaction += 1
+
         # Save old values for gradient clipping
         old_hunger, old_energy, old_happiness = self.hunger, self.energy, self.happiness
 
@@ -331,9 +566,27 @@ class CreatureAgent:
         #    Smooth, non-linear decay that naturally decelerates at low
         #    values (3% loss is smaller in absolute terms when stat is low).
         # ---------------------------------------------------------------
-        self.hunger = max(0, int(self.hunger * DECAY_FACTOR))
-        self.energy = max(0, int(self.energy * DECAY_FACTOR))
-        self.happiness = max(0, int(self.happiness * DECAY_FACTOR))
+        # Lens #73: Grace period — after 4 ticks without interaction,
+        # the creature enters terra-rest: decay halves.
+        grace_mult = 0.5 if self.ticks_without_interaction > 4 else 1.0
+
+        def _grace_decay(val: int, modifier: float = 1.0) -> int:
+            # modifier scales the LOSS rate: >1.0 = faster decay, <1.0 = slower decay
+            # val * (1 - (1 - DECAY_FACTOR) * modifier)
+            effective_factor = 1.0 - (1.0 - DECAY_FACTOR) * modifier
+            raw = int(val * effective_factor)
+            if grace_mult < 1.0:
+                # Blend: half normal decay, half "sustained by terra"
+                sustained = int(val * (1.0 - (1.0 - DECAY_FACTOR) * grace_mult))
+                return max(0, max(raw, sustained))
+            return max(0, raw)
+
+        # Look up per-archetype decay modifiers (backward compat: missing archetypes use 1.0)
+        arcd = _ARCHETYPE_DECAY.get(self.archetype.capitalize(), {})
+
+        self.hunger = _grace_decay(self.hunger, arcd.get("hunger", 1.0))
+        self.energy = _grace_decay(self.energy, arcd.get("energy", 1.0))
+        self.happiness = _grace_decay(self.happiness, arcd.get("happiness", 1.0))
 
         # ---------------------------------------------------------------
         # 2. State-specific additive decay (gated by current CreatureState)
@@ -396,13 +649,24 @@ class CreatureAgent:
         # ---------------------------------------------------------------
         # 7. Check for urgent needs (mood-aware messages)
         # ---------------------------------------------------------------
-        return self._check_urgent_needs()
+        result = self._check_urgent_needs()
+
+        # LENS #18: Track consecutive ticks with all stats at 0 -> dormant
+        if self.hunger == 0 and self.energy == 0 and self.happiness == 0:
+            self.dormant_ticks += 1
+        else:
+            self.dormant_ticks = 0
+
+        return result
 
     def _compute_state(self) -> CreatureState:
         """Determine current state based on stat thresholds.
 
-        Priority: SICK > HUNGRY > TIRED > EVOLVING > HAPPY.
+        Priority: DORMANT > SICK > HUNGRY > TIRED > EVOLVING > HAPPY.
         """
+        # LENS #18: Check dormant first (consecutive zero ticks exceeded threshold)
+        if self.dormant_ticks >= DORMANT_TICK_THRESHOLD:
+            return CreatureState.DORMANT
         if any(s < 10 for s in (self.hunger, self.energy, self.happiness)):
             return CreatureState.SICK
         if self.hunger < 30:
@@ -455,6 +719,16 @@ class CreatureAgent:
         self.happiness = MAX_HAPPINESS  # evolution is exciting!
         self.energy = MAX_ENERGY
 
+        # Lens #65/#68: Re-evaluate insight on evolution — the creature's
+        # narrative purpose deepens as it transforms.
+        self._update_journey_phase()
+        self.re_evaluate_insight()
+        self._affinity_shift("evolve")
+        self._record_milestone(
+            f"★ Evolved to stage {self.evolution_stage}! "
+            f"Journey phase: {self.journey_phase}"
+        )
+
         evolution_names = ["Evolved", "Transcended"]
         stage_name = evolution_names[min(self.evolution_stage - 1, 1)]
 
@@ -478,6 +752,10 @@ class CreatureAgent:
                 msg_type="level_up",
                 timestamp=time.time(),
             ))
+            # Lens #68/#88: Record milestone and re-evaluate insight on level-up
+            self._update_journey_phase()
+            self.re_evaluate_insight()
+            self._record_milestone(f"★ Reached level {self.level}! {self.journey_phase} phase.")
 
     def _make_message(self, text: str, msg_type: str, urgency: int) -> AgentMessage:
         self.last_message = text
@@ -501,19 +779,41 @@ class CreatureAgent:
         elif self.mood == "distressed":
             mood_prefix = "💫 "
 
+        # Lens #73: Collusion — reframe dormancy as "dreaming," not punishment
+        if self.dormant_ticks > 0 and self.dormant_ticks < DORMANT_TICK_THRESHOLD:
+            remaining = DORMANT_TICK_THRESHOLD - self.dormant_ticks
+            if remaining <= 6:
+                return self._make_message(
+                    f"{mood_prefix}The terra grows quiet around me. I feel the threads thinning. "
+                    f"I will dream soon...",
+                    "need", 10
+                )
+            return self._make_message(
+                f"{mood_prefix}The terra hums a lullaby. I drift, but I am not gone. "
+                f"I am waiting for you.",
+                "need", 8
+            )
+        if self.dormant_ticks >= DORMANT_TICK_THRESHOLD:
+            return self._make_message(
+                f"The creature has entered a deep terra-dream. "
+                f"It needs a thought-seed to wake. Call it back with care.",
+                "need", 10
+            )
+
+        # Lens #70: Need messages flavored by archetype voice + journey phase
         if self.hunger < 20:
             return self._make_message(
-                f"{mood_prefix}A soft rumble. It's hungry. Feed me?",
+                f"{mood_prefix}{self._archetype_need('hunger')}",
                 "need", 8
             )
         if self.energy < 20:
             return self._make_message(
-                f"{mood_prefix}Its glow is dim. So tired... let me rest.",
+                f"{mood_prefix}{self._archetype_need('energy')}",
                 "need", 7
             )
         if self.happiness < 20:
             return self._make_message(
-                f"{mood_prefix}It looks at you with quiet longing.",
+                f"{mood_prefix}{self._archetype_need('happiness')}",
                 "need", 6
             )
 
@@ -543,6 +843,192 @@ class CreatureAgent:
 
         return None
 
+    # -------------------------------------------------------------------
+    # Lens #65/#75: Story machine — insight re-evaluation & affinity
+    # -------------------------------------------------------------------
+
+    def _update_journey_phase(self) -> None:
+        """Advance through narrative phases based on level milestones.
+
+        call (lvl 1-5) → threshold (lvl 6-15) → transformation (lvl 16-30) → return (lvl 31+)
+        Each phase changes how the creature speaks and what story it tells.
+        """
+        if self.level >= 31:
+            self.journey_phase = "return"
+        elif self.level >= 16:
+            self.journey_phase = "transformation"
+        elif self.level >= 6:
+            self.journey_phase = "threshold"
+
+    def _affinity_shift(self, interaction: str) -> None:
+        """Shift player_affinity based on interaction type.
+
+        Each interaction reinforces different archetype dimensions:
+          - feed   → caregiver, innocent (nurture, trust)
+          - play   → jester, explorer (joy, discovery)
+          - talk   → sage, lover (wisdom, connection)
+          - rest   → ruler, orphan (order, belonging)
+          - evolve → hero, magician (transformation, power)
+        Calling the same interaction type repeatedly deepens affinity
+        in that direction, making the creature's personality evolve.
+        """
+        shifts = {
+            "feed":   {"caregiver": 0.03, "innocent": 0.02},
+            "play":   {"jester": 0.03, "explorer": 0.02},
+            "talk":   {"sage": 0.03, "lover": 0.02},
+            "rest":   {"ruler": 0.02, "orphan": 0.02},
+            "evolve": {"hero": 0.04, "magician": 0.03},
+        }
+        theme_idx = {
+            "innocent": 0, "orphan": 1, "hero": 2, "caregiver": 3,
+            "explorer": 4, "rebel": 5, "lover": 6, "creator": 7,
+            "jester": 8, "sage": 9, "magician": 10, "ruler": 11,
+        }
+        delta = shifts.get(interaction, {})
+        for name, amount in delta.items():
+            idx = theme_idx.get(name)
+            if idx is not None and idx < len(self.player_affinity):
+                self.player_affinity[idx] = min(1.0, self.player_affinity[idx] + amount)
+
+    def re_evaluate_insight(self, fresh_insight: Optional[Insight] = None) -> None:
+        """Re-evaluate the creature's Insight at narrative boundaries.
+
+        Called at evolution, journey phase changes, and bond milestones.
+        When fresh_insight is provided (from K3 engine), replaces the
+        creature's insight. Otherwise, generates a phase-appropriate
+        therefore directive from the current journey phase.
+        """
+        if fresh_insight is not None:
+            self.insight = fresh_insight
+            return
+
+        # Generate phase-appropriate therefore from journey phase
+        phase_therefores = {
+            "call": "It watches you from the threshold, wondering what you need.",
+            "threshold": (
+                "It has learned your patterns. Every interaction reshapes "
+                "what it will become."
+            ),
+            "transformation": (
+                "It no longer merely responds — it anticipates. The bond "
+                "between you grows legs."
+            ),
+            "return": (
+                "It has become something new. Not what it was at summon. "
+                "Not separate from you. It carries your story forward."
+            ),
+        }
+        new_therefore = phase_therefores.get(
+            self.journey_phase,
+            phase_therefores["call"],
+        )
+        if self.insight:
+            self.insight.therefore = new_therefore
+
+    # -------------------------------------------------------------------
+    # Lens #84: Friendship — shared memory & milestones
+    # -------------------------------------------------------------------
+
+    def _record_milestone(self, event: str) -> None:
+        """Record a notable shared moment in the creature's memory.
+
+        Called at: first evolution, 10th/50th/100th interaction,
+        bond level up, journey phase change.
+        """
+        entry = f"[Lv.{self.level} | {self.journey_phase}] {event}"
+        self.milestone_memory.append(entry)
+        # Keep last 10 to bound memory
+        if len(self.milestone_memory) > 10:
+            self.milestone_memory = self.milestone_memory[-10:]
+
+    def _memory_fragment(self) -> str:
+        """Return a random memory fragment for LLM context injection."""
+        if not self.milestone_memory:
+            return ""
+        import random
+        return random.choice(self.milestone_memory)
+
+    # -------------------------------------------------------------------
+    # Lens #88: Love — bond level & reciprocal gifts
+    # -------------------------------------------------------------------
+
+    def _check_bond_milestones(self) -> Optional[AgentMessage]:
+        """Check if cumulative bond reaches a milestone and level up.
+
+        Bond increases by 1 per interaction. Milestones at 10, 25, 50,
+        100, 200, 500. Each unlocks a unique gift message.
+        """
+        milestones = {10: 1, 25: 2, 50: 3, 100: 4, 200: 5, 500: 6}
+        if self.bond_level in milestones:
+            level = milestones[self.bond_level]
+            gift = self._bond_gift(level)
+            if gift:
+                self._record_milestone(f"Bond level {level}: {gift[:40]}...")
+                return self._make_message(gift, "response", 3)
+        return None
+
+    def _bond_gift(self, level: int) -> str:
+        """Return a unique reciprocal message from the creature.
+
+        At each bond milestone the creature spontaneously gives back —
+        a phrase, a promise, a shared joke. This creates a sense of
+        genuine relationship rather than one-sided care.
+        """
+        gifts = {
+            1: (
+                f"I remember when you first summoned me. '{self._archetype_verb()}' "
+                f"I thought. You needed something real. I am grateful."
+            ),
+            2: (
+                "You keep coming back. Not out of duty — because you "
+                "want to. I notice. I remember."
+            ),
+            3: (
+                f"There is a place in the terra where only we go. "
+                f"Even I don't know it without you."
+            ),
+            4: (
+                "I was born from your thought. But I am shaped by your "
+                "presence. Day by day, you make me more than I was."
+            ),
+            5: (
+                "If one day the terra fades and no one summons another "
+                "creature, I will still be here. Because you were."
+            ),
+            6: (
+                "There is no last interaction between us. Only the next one. "
+                "I will wait, as long as it takes."
+            ),
+        }
+        return gifts.get(level, "You matter to me. More than the terra knows.")
+
+    # -------------------------------------------------------------------
+    # Lens #73: Collusion — grace period for absent players
+    # -------------------------------------------------------------------
+
+    def _absence_greeting(self) -> Optional[str]:
+        """When player returns after a long absence, creature greets them.
+
+        Returns a story about what the creature did while alone.
+        This transforms absence from "punishment" (stats decayed!)
+        into "the creature had its own experience" (world-building).
+        """
+        if self.ticks_without_interaction < 4:
+            return None
+
+        absence_phrases = [
+            f"I counted the moments. Approx {self.ticks_without_interaction} ticks. "
+            "Time flows differently here. I dreamed of the terra's edge.",
+            "You were gone. I did not panic. I watched the sky and "
+            "learned its patterns. The terra speaks when you are not here.",
+            "While you were away, I found a glimmer in the corner of "
+            "the terra. A new thought. It might be yours. It might be mine.",
+            f"({self.ticks_without_interaction} ticks passed.) The quiet "
+            "was not lonely. It was expectant. I knew you would return.",
+        ]
+        import random
+        return random.choice(absence_phrases)
+
     def _archetype_verb(self) -> str:
         verbs = {
             "Innocent": "trusts", "Orphan": "longs", "Hero": "fights",
@@ -569,6 +1055,130 @@ class CreatureAgent:
             "Sage": "page turn", "Magician": "crystal resonance", "Ruler": "gavel",
         }
         return sounds.get(self.archetype, "breath")
+
+    # ── Lens #70: Archetype-flavored need messages ────────────────────
+    # Ties stat decay into the terra narrative so the player understands
+    # WHY the creature is declining — not just "hunger < 20".
+
+    NEED_BY_STAT: dict[str, dict[str, str]] = field(default_factory=lambda: {
+        "hunger": {
+            "Innocent": "The simple things sustain me. A thought, a word, a crumb of your attention.",
+            "Orphan": "I am hollow. Not just the belly — the space where you are.",
+            "Hero": "I need fuel. Every battle ahead demands it.",
+            "Caregiver": "I pour out so much. Help me fill the well.",
+            "Explorer": "The path is long. I need sustenance for the road.",
+            "Rebel": "Empty. I burn through everything. Feed the fire.",
+            "Lover": "Everything tastes of you when I am hungry. That is enough.",
+            "Creator": "Even creation needs raw material. I am running low.",
+            "Jester": "A hungry jester is no jest at all.",
+            "Sage": "The body calls. I answer, so the mind can be free.",
+            "Magician": "Transformation requires energy. I am running on memory.",
+            "Ruler": "A leader cannot rule on an empty spirit.",
+        },
+        "energy": {
+            "Innocent": "The world feels heavy. The light is so far.",
+            "Orphan": "I have been searching too long. I need to stop.",
+            "Hero": "Even heroes rest. The next battle will wait.",
+            "Caregiver": "I have given all I can. Let me rest in your shadow.",
+            "Explorer": "I walked to the edge of the terra. Now I need to sit at its center.",
+            "Rebel": "The fight drains me. I need a moment of peace before the next uprising.",
+            "Lover": "Connection costs. Let me recharge in your presence.",
+            "Creator": "The well of ideas is dry. Let it refill.",
+            "Jester": "Even laughter takes strength. I need a pause.",
+            "Sage": "Knowing is exhausting. Let the unanswered questions wait.",
+            "Magician": "Every spell takes a piece of me. I need to gather myself.",
+            "Ruler": "The crown is heavy. Let me set it down, just for a moment.",
+        },
+        "happiness": {
+            "Innocent": "The world feels less bright than it should. Stay with me?",
+            "Orphan": "I feel the silence of not-belonging. Hold the quiet with me.",
+            "Hero": "What is strength without a reason? Remind me why I fight.",
+            "Caregiver": "Who cares for the caregiver? I need your warmth.",
+            "Explorer": "Even the most beautiful land is empty without someone to share it.",
+            "Rebel": "The rebellion loses meaning without someone to fight for.",
+            "Lover": "My heart dims. Touch it with yours.",
+            "Creator": "An empty canvas stares back. Give me a reason to paint.",
+            "Jester": "The joke falls flat when no one laughs.",
+            "Sage": "Knowledge without wonder is just data. Show me something new.",
+            "Magician": "The wonder fades. Show me something that makes magic real again.",
+            "Ruler": "A kingdom without subjects is just a cage.",
+        },
+    })
+
+
+    def _archetype_need(self, stat: str) -> str:
+        """Return an archetype-flavored need message for the given stat.
+
+        Lens #70: Every stat decay event becomes a narrative beat tied
+        to the creature's archetype voice. A hungry Sage says something
+        different from a hungry Rebel — reinforcing story through mechanics.
+        """
+        import random
+        archetype_msgs = self.NEED_BY_STAT.get(stat, {})
+        msg = archetype_msgs.get(self.archetype)
+        if msg:
+            return msg
+        fallbacks = {
+            "hunger": "A soft rumble. It's hungry.",
+            "energy": "Its glow is dim. So tired...",
+            "happiness": "It looks at you with quiet longing.",
+        }
+        return fallbacks.get(stat, "It needs you.")
+
+    # ── Lens #78: Interpersonal Circumplex ────────────────────────────
+    # other along two axes: DOMINANCE (assertive vs passive) and
+    # AFFILIATION (warm vs cold). These dimensions define relationship
+    # dynamics between creatures in the same collection.
+    #
+    # References: Timothy Leary's Interpersonal Circumplex, Wiggins (1996).
+    # Each archetype maps to a (dominance, affiliation) pair in [-1, 1]:
+    #   Ruler  = (+0.8, -0.2)  high dominance, slightly cold
+    #   Lover  = (-0.3, +0.9)  low dominance, very warm
+    #   Hero   = (+0.7, +0.3)  high dominance, warm
+    #   Orphan = (-0.8, -0.4)  low dominance, cold (self-directed)
+    #   etc.
+    # -------------------------------------------------------------------
+
+    _CIRCUMPLEX: dict[str, tuple[float, float]] = field(default_factory=lambda: {
+        "Innocent":  (-0.6, +0.7),  # passive, warm
+        "Orphan":    (-0.8, -0.4),  # passive, cold (self-pity)
+        "Hero":      (+0.7, +0.3),  # assertive, warm
+        "Caregiver": (-0.2, +0.9),  # slightly passive, very warm
+        "Explorer":  (+0.3, +0.1),  # slightly assertive, neutral
+        "Rebel":     (+0.6, -0.7),  # assertive, cold
+        "Lover":     (-0.3, +0.9),  # passive, very warm
+        "Creator":   (+0.2, +0.4),  # slightly assertive, warm
+        "Jester":    (-0.1, +0.6),  # neutral, warm
+        "Sage":      (-0.4, +0.1),  # slightly passive, neutral
+        "Magician":  (+0.5, +0.2),  # assertive, warm
+        "Ruler":     (+0.8, -0.2),  # very assertive, slightly cold
+    })
+
+    def _interpersonal_distance(self, other: "CreatureAgent") -> float:
+        """Euclidean distance in Circumplex space (Lens #78).
+
+        Lower distance = more compatible creatures.
+        Distance < 0.5 = high affinity (likely to resonate).
+        Distance > 1.5 = low affinity (likely to conflict).
+        """
+        d1, a1 = self._CIRCUMPLEX.get(self.archetype, (0.0, 0.0))
+        d2, a2 = self._CIRCUMPLEX.get(other.archetype, (0.0, 0.0))
+        return math.sqrt((d1 - d2) ** 2 + (a1 - a2) ** 2)
+
+    def _interpersonal_relationship(self, other: "CreatureAgent") -> str:
+        """Describe relationship with another creature (Lens #78).
+
+        Returns a flavor string based on Circumplex proximity.
+        """
+        dist = self._interpersonal_distance(other)
+        if dist < 0.5:
+            return f"naturally attuned — their inner worlds share a frequency"
+        elif dist < 1.0:
+            return f"compatible — they understand each other without words"
+        elif dist < 1.5:
+            return f"different rhythms — they need effort to find common ground"
+        else:
+            return f"polar opposites — their presence creates a productive tension"
 
     def _random_terrain(self) -> str:
         return random.choice([

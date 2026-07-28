@@ -31,6 +31,7 @@ class TurnResult:
     xp_gained: int
     reveal: str
     goal_reached: bool
+    price_sats: int = 0  # P1 T07: uniqueness-adjusted MINT price
 
 
 class GameLoop:
@@ -52,6 +53,11 @@ class GameLoop:
 
         rarity = Rarity(seed.rarity)
         xp_gained = self.progress.award(seed.summoned_agent, rarity)
+        # Lens #39 fix: read goal_reached BEFORE render_reveal (which also
+        # reads it, and goal_reached is a mutable-access property that
+        # advances the tier on first read). Reading it first ensures the
+        # TurnResult gets the correct value.
+        goal_reached = self.progress.goal_reached
         reveal = render_reveal(
             agent=seed.summoned_agent,
             rarity=rarity,
@@ -64,5 +70,6 @@ class GameLoop:
             rarity=seed.rarity,
             xp_gained=xp_gained,
             reveal=reveal,
-            goal_reached=self.progress.goal_reached,
+            goal_reached=goal_reached,
+            price_sats=seed.price_sats,
         )

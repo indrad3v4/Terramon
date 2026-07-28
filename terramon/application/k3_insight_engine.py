@@ -115,11 +115,9 @@ class Dropout:
 # (Softmax moved to math_utils — use `softmax(scores, temperature)` from there)
 
 # ---------------------------------------------------------------------------
-# 10 themes
-_THEME_NAMES = [
-    "innocent", "orphan", "hero", "caregiver", "explorer",
-    "rebel", "lover", "creator", "jester", "sage", "magician", "ruler",
-]
+# Archetype names — canonical source is EmbeddingClassifier.ARCHETYPES
+from terramon.adapters.embedding_classifier import EmbeddingClassifier as _EC
+_THEME_NAMES = [n.lower() for n in _EC.ARCHETYPES]
 
 # Expanded DRIVER/BARRIER/THEREFORE for Jung's 12 archetypes
 _DRIVER_BY_THEME: dict[str, str] = {
@@ -445,14 +443,16 @@ def _get_net() -> MoENetwork:
 def extract_insight(raw_input: str,
                     geo: Optional[GeoContext] = None,
                     use_attention: bool = True,
-                    top_k: Optional[int] = None,
+                    top_k: Optional[int] = 3,
                     thinking_steps: int = 1,
                     use_reasoning_chain: bool = False) -> Insight:
     """Fast K3-style insight extraction with Phase 5+18 enhancements.
 
     Phase 5: Attention-based archetype scoring (when use_attention=True).
     Phase 18 (Advanced Topics):
-      - top_k: Sparse MoE routing (Mixtral 8x7B style).
+      - top_k: Sparse MoE routing (Mixtral 8x7B style). Defaults to 3
+        (Lens #23 Emergence) so different thoughts activate different
+        expert subsets, increasing emergence variety.
       - thinking_steps: Test-time compute — average scores across N passes.
       - use_reasoning_chain: Iterative re-ranking of experts.
 
@@ -504,6 +504,33 @@ def extract_insight(raw_input: str,
     barrier = _BARRIER_BY_THEME.get(theme, "the quiet ordinary")
     therefore = _BEHAVIOR_BY_BARRIER.get(barrier, _BEHAVIOR_BY_BARRIER["the quiet ordinary"])
 
+    # Lens #33 Triangularity: encode the thought into the 512-dim embedding
+    # space and carry it forward so every creature remembers its origin.
+    from terramon.adapters.embedding_classifier import _encode as _ec_encode
+    _idf = None
+    try:
+        from terramon.adapters.embedding_classifier import EmbeddingClassifier
+        _idf = EmbeddingClassifier()._idf  # reuse cached IDF
+    except Exception:
+        pass
+    embedding = _ec_encode(text, idf=_idf, geo=geo)
+
+    # P1-T02: Try LLM-generated THEREFORE from embedding (unique per thought).
+    # Falls back to archetype template if LLM unavailable.
+    try:
+        from terramon.application.llm_behavior import (
+            generate_llm_therefore,
+            has_api_key,
+        )
+        if has_api_key():
+            llm_therefore = generate_llm_therefore(
+                embedding, theme.title(), geo
+            )
+            if llm_therefore:
+                therefore = llm_therefore
+    except Exception:
+        pass  # Fall back to template THEREFORE
+
     return Insight(
         driver=driver,
         barrier=barrier,
@@ -512,6 +539,111 @@ def extract_insight(raw_input: str,
         nuance=nuance,
         geo=geo,
         confidence=confidence,
+        embedding=embedding,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Lens #65: Story Machine — Re-evaluate insight from player affinity
+# ---------------------------------------------------------------------------
+
+_AFFINITY_TO_THEME: dict[int, str] = {
+    0: "innocent", 1: "orphan", 2: "hero", 3: "caregiver",
+    4: "explorer", 5: "rebel", 6: "lover", 7: "creator",
+    8: "jester", 9: "sage", 10: "magician", 11: "ruler",
+}
+
+# Interaction-type → primary affinity dimension mapping
+_AFFINITY_INTERACTION_MAP: dict[str, int] = {
+    "feed": 3,     # caregiver
+    "play": 8,     # jester
+    "talk": 9,     # sage
+    "rest": 11,    # ruler
+    "evolve": 2,   # hero
+}
+
+
+def re_evaluate_by_affinity(
+    affinity: list[float],
+    last_interaction: str = "",
+    geo: Optional[GeoContext] = None,
+) -> Insight:
+    """Re-evaluate Insight from player_affinity vector.
+
+    Instead of extracting from a single thought seed, this function
+    reads the player's accumulated affinity (shaped by repeated
+    interaction types) and produces a new Insight that reflects the
+    creature's evolved understanding of the player.
+
+    Args:
+        affinity: List of 12 floats, one per Jungian archetype.
+        last_interaction: The interaction type that triggered re-eval.
+        geo: Optional GeoContext for geographic anchoring.
+
+    Returns:
+        Insight with driver/barrier/therefore re-derived from affinity.
+    """
+    if not affinity or len(affinity) < 12:
+        return Insight(
+            driver="to be met where you are",
+            barrier="the quiet ordinary",
+            therefore=_BEHAVIOR_BY_BARRIER["the quiet ordinary"],
+        )
+
+    # Find the archetype with highest affinity
+    winner = max(range(12), key=lambda i: affinity[i])
+    theme = _AFFINITY_TO_THEME[winner]
+    confidence = round(affinity[winner] * 100)
+
+    # Boost the winner from the last interaction type to capture recency
+    boost_idx = _AFFINITY_INTERACTION_MAP.get(last_interaction)
+    if boost_idx is not None and boost_idx < len(affinity):
+        # Blend: 70% affinity, 30% recency boost
+        boosted = list(affinity)
+        boosted[boost_idx] = min(1.0, boosted[boost_idx] + 0.1)
+        winner = max(range(12), key=lambda i: boosted[i])
+        theme = _AFFINITY_TO_THEME[winner]
+
+    driver = _DRIVER_BY_THEME.get(theme, "to be met where you are")
+    barrier = _BARRIER_BY_THEME.get(theme, "the quiet ordinary")
+    therefore = _BEHAVIOR_BY_BARRIER.get(barrier, _BEHAVIOR_BY_BARRIER["the quiet ordinary"])
+
+    # Produce the embedding from the illusion of a thought seed
+    # (affinity-weighted text for embedding reproducibility)
+    text_seed = f"affinity re-evaluation: {theme} ({affinity[winner]:.2f})"
+    from terramon.adapters.embedding_classifier import _encode as _ec_encode
+    _idf = None
+    try:
+        from terramon.adapters.embedding_classifier import EmbeddingClassifier
+        _idf = EmbeddingClassifier()._idf
+    except Exception:
+        pass
+    embedding = _ec_encode(text_seed, idf=_idf, geo=geo)
+
+    # P1-T02: Try LLM-generated THEREFORE from embedding (unique per thought).
+    try:
+        from terramon.application.llm_behavior import (
+            generate_llm_therefore,
+            has_api_key,
+        )
+        if has_api_key():
+            llm_therefore = generate_llm_therefore(
+                embedding, theme.title(), geo
+            )
+            if llm_therefore:
+                therefore = llm_therefore
+    except Exception:
+        pass
+
+    return Insight(
+        driver=driver,
+        barrier=barrier,
+        therefore=therefore,
+        archetype=theme.title(),
+        nuance=f"affinity-re-evaluated: {theme} ({affinity[winner]:.2f})",
+        geo=geo,
+        confidence=confidence,
+        embedding=embedding,
     )
 
 
@@ -593,6 +725,32 @@ def long_context_insight(thoughts: list[str],
     barrier = _BARRIER_BY_THEME.get(theme, "the quiet ordinary")
     therefore = _BEHAVIOR_BY_BARRIER.get(barrier, _BEHAVIOR_BY_BARRIER["the quiet ordinary"])
 
+    # Produce an embedding for LLM THEREFORE generation
+    text_seed = f"long-context ({n} thoughts) → {theme}"
+    from terramon.adapters.embedding_classifier import _encode as _ec_encode
+    _idf = None
+    try:
+        from terramon.adapters.embedding_classifier import EmbeddingClassifier
+        _idf = EmbeddingClassifier()._idf
+    except Exception:
+        pass
+    embedding = _ec_encode(text_seed, idf=_idf, geo=geo)
+
+    # P1-T02: Try LLM-generated THEREFORE from embedding (unique per thought).
+    try:
+        from terramon.application.llm_behavior import (
+            generate_llm_therefore,
+            has_api_key,
+        )
+        if has_api_key():
+            llm_therefore = generate_llm_therefore(
+                embedding, theme.title(), geo
+            )
+            if llm_therefore:
+                therefore = llm_therefore
+    except Exception:
+        pass
+
     return Insight(
         driver=driver,
         barrier=barrier,
@@ -601,6 +759,7 @@ def long_context_insight(thoughts: list[str],
         nuance=nuance,
         geo=geo,
         confidence=confidence,
+        embedding=embedding,
     )
 
 

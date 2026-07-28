@@ -52,6 +52,12 @@ class Insight:
                  vector's distinctive features).
     geo        — where on Earth this thought was born (lat/lon/place).
     confidence — softmax probability of the nearest archetype (0-100).
+    embedding  — (Lens #33 Triangularity) the 512-dim hashed sparse embedding
+                 vector of the player's thought, stored as a dict of
+                 {bucket: weight} so the creature carries its origin. This
+                 completes the Player ↔ Thought ↔ Creature triangle: the
+                 creature knows where it came from, not just its archetype
+                 label.
     """
     driver: str
     barrier: str
@@ -60,3 +66,4 @@ class Insight:
     nuance: str = ""             # what makes THIS thought unique
     geo: Optional[GeoContext] = None
     confidence: int = 0          # 0-100
+    embedding: dict[int, float] | None = None  # Lens #33 Triangularity

@@ -64,21 +64,29 @@ def _scores(text: str) -> list[float]:
 
 def extract_insight(raw_input: str,
                     geo=None,
-                    thinking_steps: int = 3) -> Insight:
+                    thinking_steps: int = 3,
+                    top_k: int | None = None,
+                    use_reasoning_chain: bool = False,
+                    use_attention: bool = True) -> Insight:
     """Derive the INSIGHT from raw player text.
 
-    Now delegates to the K3 MoE engine (12 Jungian archetypes, softmax
+    Delegates to the K3 MoE engine (12 Jungian archetypes, softmax
     probability distribution, confidence score).
 
     Args:
         raw_input: player's thought text
         geo: optional GeoContext (where on Earth the thought was born)
         thinking_steps: iterative refinement steps
-
-    Returns:
-        Insight with driver, barrier, therefore, archetype, nuance,
-        geo (if provided), confidence (0-100%)
+        top_k: sparse MoE expert count (None=dense, 3=Mixtral-style)
+        use_reasoning_chain: iterative re-ranking of experts
+        use_attention: attention-weighted archetype scoring (Phase 5)
     """
     from terramon.application.k3_insight_engine import extract_insight as k3_extract
-    return k3_extract(raw_input, geo=geo)
+    return k3_extract(
+        raw_input, geo=geo,
+        top_k=top_k,
+        thinking_steps=thinking_steps,
+        use_reasoning_chain=use_reasoning_chain,
+        use_attention=use_attention,
+    )
 

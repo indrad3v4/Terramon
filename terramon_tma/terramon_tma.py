@@ -214,6 +214,18 @@ class TerramonState(rx.State):
     safety_flagged: bool = False
     safety_reason: str = ""
 
+    # I03 — Embedding drift (how much creature evolved since birth)
+    embedding_drift: float = 0.0
+
+    # Domain — bond level from creature_agent.py
+    bond_level: int = 0
+
+    # I05 — Progression tier display
+    tier_name: str = "Tamer"
+    tier_badge: str = "★"
+    next_tier_name: str = "Master"
+    next_tier_distinct: int = 5
+
     # Phase 19 — Scout integration
     scout_result: str = ""
     scout_running: bool = False
@@ -271,7 +283,7 @@ class TerramonState(rx.State):
             self.sigil = _RARITY_SIGIL[rarity]
             self.color = _RARITY_COLOR[rarity]
             self.lore = _ARCHETYPE_LORE.get(result.agent, "A thought made flesh.")
-            self.price_sats = _price_for(rarity)
+            self.price_sats = result.price_sats
             self.xp = _LOOP.progress.xp
             self.level = _LOOP.progress.level
             self.distinct = _LOOP.progress.distinct_count
@@ -377,6 +389,22 @@ class TerramonState(rx.State):
         except Exception as e:
             log.warning(f"Rarity/evolve failed: {e}")
 
+        # I03: Embedding drift — how much this creature evolved since birth
+        try:
+            self.embedding_drift = _MEMORY.compute_embedding_drift(self.agent)
+        except Exception as e:
+            log.warning(f"Embedding drift failed: {e}")
+
+        # I05: Progression tier vars from PlayerProgress
+        try:
+            _p = _LOOP.progress
+            self.tier_name = _p.current_tier_name
+            self.tier_badge = _p.current_tier_badge
+            self.next_tier_name = _p.next_tier_name
+            self.next_tier_distinct = _p.next_tier_requirement
+        except Exception as e:
+            log.warning(f"Tier vars failed: {e}")
+
         # Phase 19: Creature state + mood computation
         try:
             from tools.time_tool import get_day_phase
@@ -460,6 +488,11 @@ class TerramonState(rx.State):
             self.level = _LOOP.progress.level
             self.distinct = _LOOP.progress.distinct_count
             self.goal = _LOOP.progress.goal_distinct
+            # I05: progression tier vars
+            self.tier_name = _LOOP.progress.current_tier_name
+            self.tier_badge = _LOOP.progress.current_tier_badge
+            self.next_tier_name = _LOOP.progress.next_tier_name
+            self.next_tier_distinct = _LOOP.progress.next_tier_requirement
 
         # Phase 4: tick decay on app open (retention)
         if seeds:
@@ -677,15 +710,6 @@ class TerramonState(rx.State):
             log.debug(f"Portrait refresh skipped: {e}")
 
 
-def _price_for(rarity: str) -> int:
-    return {
-        "common": 0,
-        "uncommon": 0,
-        "rare": 15,
-        "legendary": 25,
-    }.get(rarity, 0)
-
-
 def _seed_to_card(seed: ThoughtSeed) -> dict:
     rarity = seed.rarity if isinstance(seed.rarity, str) else seed.rarity.value
     card = {
@@ -871,6 +895,33 @@ def creature_card() -> rx.Component:
                         font_size="0.75em", color="#c4b5fd", font_weight="bold"),
                 spacing="1",
             ),
+            # I03: Embedding drift — amber progress bar
+            rx.cond(
+                TerramonState.embedding_drift > 0,
+                rx.vstack(
+                    rx.hstack(
+                        rx.text("🧬 Evolved", font_size="0.7em", color="#f59e0b"),
+                        rx.text(TerramonState.embedding_drift.to_string() + "% since birth",
+                                font_size="0.7em", color="#f59e0b", font_weight="bold"),
+                        justify="between",
+                        width="100%",
+                    ),
+                    rx.box(
+                        rx.box(
+                            style={"width": TerramonState.embedding_drift.to_string() + "%",
+                                   "height": "100%",
+                                   "background": "linear-gradient(90deg, #f59e0b, #d97706)",
+                                   "border_radius": "999px",
+                                   "transition": "width 0.4s ease"},
+                        ),
+                        width="100%", height="6px",
+                        background="#27272a", border_radius="999px", overflow="hidden",
+                    ),
+                    width="100%",
+                    spacing="1",
+                ),
+                rx.fragment(),
+            ),
             # Phase 19: BPE tokenizer status
             rx.cond(
                 TerramonState.token_count > 0,
@@ -1043,7 +1094,14 @@ def creature_care_panel() -> rx.Component:
                     align="center",
                 ),
                 # Stat bars — bound to state vars (WAS hardcoded 50% — Lens #55 roast)
-                rx.text("🍽️ Hunger", font_size="0.7em", color="#9ca3af"),
+                # I14: numeric overlays
+                rx.hstack(
+                    rx.text("🍽️ Hunger", font_size="0.7em", color="#9ca3af"),
+                    rx.text(TerramonState.agent_hunger.to_string() + "/100",
+                            font_size="0.7em", color="#f59e0b", font_weight="bold"),
+                    justify="between",
+                    width="100%",
+                ),
                 rx.box(
                     rx.box(
                         style={"width": TerramonState.agent_hunger.to_string() + "%",
@@ -1055,7 +1113,13 @@ def creature_care_panel() -> rx.Component:
                     width="100%", height="8px",
                     background="#27272a", border_radius="999px", overflow="hidden",
                 ),
-                rx.text("⚡ Energy", font_size="0.7em", color="#9ca3af"),
+                rx.hstack(
+                    rx.text("⚡ Energy", font_size="0.7em", color="#9ca3af"),
+                    rx.text(TerramonState.agent_energy.to_string() + "/100",
+                            font_size="0.7em", color="#22c55e", font_weight="bold"),
+                    justify="between",
+                    width="100%",
+                ),
                 rx.box(
                     rx.box(
                         style={"width": TerramonState.agent_energy.to_string() + "%",
@@ -1067,7 +1131,13 @@ def creature_care_panel() -> rx.Component:
                     width="100%", height="8px",
                     background="#27272a", border_radius="999px", overflow="hidden",
                 ),
-                rx.text("❤️ Happiness", font_size="0.7em", color="#9ca3af"),
+                rx.hstack(
+                    rx.text("❤️ Happiness", font_size="0.7em", color="#9ca3af"),
+                    rx.text(TerramonState.agent_happiness.to_string() + "/100",
+                            font_size="0.7em", color="#ef4444", font_weight="bold"),
+                    justify="between",
+                    width="100%",
+                ),
                 rx.box(
                     rx.box(
                         style={"width": TerramonState.agent_happiness.to_string() + "%",
@@ -1532,18 +1602,33 @@ def index() -> rx.Component:
                         rx.text("Lv.", color="#9ca3af", font_size="0.7em"),
                         rx.text(TerramonState.level.to_string(), color="#f59e0b",
                                 font_weight="bold", font_size="0.85em"),
+                        # I05: progression tier badge + name
                         rx.cond(
-                            TerramonState.goal_reached,
-                            rx.text("★ Tamer", color="#f59e0b",
-                                    font_weight="bold", font_size="0.7em",
-                                    text_shadow="0 0 8px rgba(245,158,11,0.4)"),
-                            rx.cond(
-                                TerramonState.distinct > 0,
-                                rx.text(TerramonState.distinct.to_string() + "/" +
-                                        TerramonState.goal.to_string(),
-                                        color="#a78bfa", font_size="0.7em"),
-                                rx.fragment(),
+                            TerramonState.distinct > 0,
+                            rx.hstack(
+                                rx.text(TerramonState.tier_badge.to_string(),
+                                        color="#f59e0b", font_size="0.8em"),
+                                rx.text(TerramonState.tier_name.to_string(),
+                                        color="#f59e0b", font_weight="bold",
+                                        font_size="0.7em"),
+                                rx.cond(
+                                    TerramonState.next_tier_name != "",
+                                    rx.text(
+                                        "→ " + TerramonState.next_tier_name.to_string()
+                                        + " (" + TerramonState.distinct.to_string() + "/"
+                                        + TerramonState.next_tier_distinct.to_string() + ")",
+                                        color="#a78bfa", font_size="0.65em",
+                                    ),
+                                    rx.fragment(),
+                                ),
+                                spacing="1",
+                                align="center",
+                                border="1px solid #f59e0b44",
+                                border_radius="999px",
+                                padding="0.1em 0.4em",
+                                background="rgba(245,158,11,0.08)",
                             ),
+                            rx.fragment(),
                         ),
                         spacing="1",
                     ),
@@ -1710,7 +1795,7 @@ def index() -> rx.Component:
                             width="100%",
                             size="2",
                             variant="soft",
-                            color_schema="gray",
+                            color_scheme="gray",
                         ),
                         rx.hstack(
                             rx.button("📷", on_click=TerramonState.capture,
@@ -1861,7 +1946,7 @@ def index() -> rx.Component:
             background="linear-gradient(180deg, #0b0b0f 0%, #101018 50%, #0b0b0f 100%)",
             height="100vh",
             width="100%",
-            style={"overflow": "hidden"},  # NO SCROLLING — GameBoy style
+            style={"overflow": "hidden", "padding_bottom": "env(safe-area-inset-bottom)"},  # NO SCROLLING — GameBoy style
         ),
         width="100%",
         height="100vh",

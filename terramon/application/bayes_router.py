@@ -27,11 +27,9 @@ from terramon.adapters.embedding_classifier import EmbeddingClassifier
 from terramon.application.insight_engine import encode
 from terramon.application.math_utils import softmax, logsumexp, entropy
 
-# Jungian archetype names (must match EmbeddingClassifier)
-_ARCHETYPE_NAMES = [
-    "Innocent", "Orphan", "Hero", "Caregiver", "Explorer",
-    "Rebel", "Lover", "Creator", "Jester", "Sage", "Magician", "Ruler",
-]
+# Jungian archetype names — canonical source is EmbeddingClassifier.ARCHETYPES
+from terramon.adapters.embedding_classifier import EmbeddingClassifier as _EC
+_ARCHETYPE_NAMES: list[str] = list(_EC.ARCHETYPES.keys())
 _N_ARCHETYPES = len(_ARCHETYPE_NAMES)
 _NAME_TO_IDX = {name: i for i, name in enumerate(_ARCHETYPE_NAMES)}
 
@@ -150,8 +148,18 @@ def update_belief(counts: list[float], winner_idx: int) -> list[float]:
     The winning archetype gets its count incremented.
     Other archetypes get no increment but their relative proportions
     naturally decrease due to normalization.
+
+    Lens #39 Time: applies exponential decay (factor 0.95) to ALL counts
+    before incrementing the winner. This ensures old beliefs fade over
+    time — a player whose recent thoughts shift from Hero to Sage will
+    see Sage rise and Hero fall, rather than Hero stacking forever.
+    Without decay, the system becomes rigid after ~50 summons.
     """
-    new_counts = counts[:]
+    # Temporal decay (Lens #39): multiply all counts by 0.95 so old
+    # evidence fades. After 20 summons, the oldest contribution carries
+    # only 0.95^20 ≈ 36% of its original weight.
+    decay_factor = 0.95
+    new_counts = [c * decay_factor for c in counts]
     new_counts[winner_idx] += 1.0
     return new_counts
 

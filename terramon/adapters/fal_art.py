@@ -29,8 +29,12 @@ from urllib.request import Request, urlopen
 
 from PIL import Image, ImageDraw, ImageFilter
 
+from terramon.application.circuit_breaker import CircuitBreaker
 from terramon.ports.art_port import ArtPort, ArtRequest, ArtResult
 from terramon.domain.rarity import Rarity
+
+# Module-level circuit breaker for FAL.ai API calls
+_fal_circuit_breaker = CircuitBreaker(max_failures=3, cooldown=60.0, name="FAL")
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -320,11 +324,23 @@ def _fal_request(
     prompt: str,
     seed: int,
 ) -> bytes:
-    """Call FAL.ai with retries and exponential backoff.
+    """Call FAL.ai with retries, exponential backoff, and circuit breaker.
+
+    Circuit breaker behaviour:
+      - If the circuit is OPEN (3 consecutive failures, 60s cooldown),
+        raises RuntimeError immediately without calling the API.
+      - A successful call resets the counter and closes the circuit (CLOSED).
+      - Exhausting all retries increments the failure counter.
 
     Returns raw image bytes on success.
-    Raises RuntimeError after exhausting retries.
+    Raises RuntimeError after exhausting retries or if circuit is OPEN.
     """
+    # ── Circuit breaker fast-fail ────────────────────────────────────
+    if not _fal_circuit_breaker.is_available:
+        raise RuntimeError(
+            "FAL.ai circuit breaker is OPEN — fast-fail (will retry after cooldown)"
+        )
+
     last_error = None
     for attempt in range(_MAX_RETRIES + 1):
         try:
@@ -356,6 +372,9 @@ def _fal_request(
             img_data = urlopen(img_req, timeout=_FAL_TIMEOUT).read()
             if not img_data:
                 raise RuntimeError("Downloaded empty image data")
+
+            # Success — reset circuit breaker
+            _fal_circuit_breaker.on_success()
             return img_data
 
         except (URLError, json.JSONDecodeError, KeyError, IndexError, RuntimeError, OSError) as e:
@@ -365,6 +384,8 @@ def _fal_request(
                 time.sleep(delay)
                 continue
 
+    # All retries exhausted — notify circuit breaker
+    _fal_circuit_breaker.on_failure()
     raise RuntimeError(f"FAL.ai request failed after {_MAX_RETRIES + 1} attempts: {last_error}")
 
 
@@ -401,8 +422,11 @@ class FalArtGenerator:
         Returns ArtResult with path, prompt, seed, bytes_len.
         Never returns an empty path — falls back to placeholder on failure.
         """
-        # 1. Deterministic seed
-        seed = hash(request.thought + request.archetype) & 0x7FFFFFFF
+        # 1. Deterministic seed (blake2b — not Python's salted hash())
+        seed_bytes = hashlib.blake2b(
+            (request.thought + request.archetype).encode(), digest_size=4
+        ).digest()
+        seed = int.from_bytes(seed_bytes, "big") & 0x7FFFFFFF
 
         # 2. Assemble prompt from game state
         prompt = request.to_prompt()

@@ -63,6 +63,60 @@ class AgentService:
     def evolve(self, agent: CreatureAgent) -> AgentMessage:
         return agent.evolve()
 
+    # ── Bond persistence helpers ───────────────────────────────────────
+
+    def bond_data_from_agent(self, agent: CreatureAgent) -> dict:
+        """Extract bond fields from a CreatureAgent as a dict for persistence."""
+        return {
+            "bond_level": agent.bond_level,
+            "player_affinity": agent.player_affinity,
+            "milestone_memory": agent.milestone_memory,
+            "player_journal": agent.player_journal,
+            "interaction_count": agent.interaction_count,
+            "last_interaction_type": agent.last_interaction_type,
+        }
+
+    def apply_bond_data(self, agent: CreatureAgent, bond_data: dict) -> None:
+        """Apply persisted bond data onto an existing CreatureAgent (in-place)."""
+        if not bond_data:
+            return
+        agent.bond_level = bond_data.get("bond_level", agent.bond_level)
+        raw = bond_data.get("player_affinity")
+        if raw:
+            agent.player_affinity = list(raw) if isinstance(raw, list) else agent.player_affinity
+        raw = bond_data.get("milestone_memory")
+        if raw:
+            agent.milestone_memory = list(raw) if isinstance(raw, list) else agent.milestone_memory
+        agent.player_journal = bond_data.get("player_journal", agent.player_journal)
+        agent.interaction_count = bond_data.get("interaction_count", agent.interaction_count)
+        agent.last_interaction_type = bond_data.get("last_interaction_type", agent.last_interaction_type)
+
+    def save_agent_bond(self, agent: CreatureAgent) -> None:
+        """Persist bond data for a CreatureAgent to JsonMemory."""
+        bond_data = self.bond_data_from_agent(agent)
+        self._memory.save_bond(agent.agent_id, bond_data)
+
+    def make_agent_with_bond(self, agent_id: str, **kwargs) -> CreatureAgent:
+        """Create a CreatureAgent and populate it with persisted bond data.
+
+        Usage:
+            agent = _AGENT_SVC.make_agent_with_bond(
+                self.agent,
+                archetype=self.agent,
+                hunger=self.agent_hunger,
+                ...
+            )
+        """
+        bond_data = self._memory.load_bond(agent_id)
+        agent = CreatureAgent(agent_id=agent_id, **kwargs)
+        self.apply_bond_data(agent, bond_data)
+
+        # If bond data has a higher interaction_count (from persisted state),
+        # use it. Otherwise the freshly created agent starts at 0 which is wrong.
+        if bond_data:
+            agent.bond_level = bond_data.get("bond_level", 0)
+        return agent
+
     def to_dict(self, agent: CreatureAgent) -> dict:
         """Serialize agent to dict for UI transmission."""
         return {
@@ -92,4 +146,17 @@ class AgentService:
             "state": agent.state.value if hasattr(agent, 'state') else "happy",
             "mood": agent.mood if hasattr(agent, 'mood') else "content",
             "state_history_count": len(agent.state_history) if hasattr(agent, 'state_history') else 0,
+            # Lens #65/#75: Story machine & avatar agency
+            "journey_phase": agent.journey_phase if hasattr(agent, 'journey_phase') else "call",
+            "bond_level": agent.bond_level if hasattr(agent, 'bond_level') else 0,
+            "player_affinity": agent.player_affinity if hasattr(agent, 'player_affinity') else [],
+            # Lens #84: Shared memories
+            "milestone_memory_count": len(agent.milestone_memory) if hasattr(agent, 'milestone_memory') else 0,
+            "milestone_memory": agent.milestone_memory[-3:] if hasattr(agent, 'milestone_memory') and agent.milestone_memory else [],
+            # Lens #85: Player expression
+            "player_journal": agent.player_journal if hasattr(agent, 'player_journal') else "",
+            # Lens #73: Grace / absence
+            "ticks_without_interaction": agent.ticks_without_interaction if hasattr(agent, 'ticks_without_interaction') else 0,
+            # Lens #86: Community sharing
+            "share_code": agent.share_code if hasattr(agent, 'share_code') else "",
         }

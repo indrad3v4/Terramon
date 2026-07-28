@@ -28,12 +28,19 @@ class Rarity(str, Enum):
     LEGENDARY = "legendary"
 
 
-RARITY_PRICE_SATS = {
+# Price per rarity tier in "Stars" (Telegram Stars equivalent).
+# Previously used satoshis (1000/5000) but the TMA payment system
+# uses Telegram Stars (15/25). Unified here so there is ONE price
+# table. The field remains `price_sats` for backward compatibility with
+# the PaymentPort interface, but the unit is now Stars.
+# Lens #28 fix: single canonical price table, no duplicate.
+RARITY_PRICE = {
     Rarity.COMMON: 0,
     Rarity.UNCOMMON: 0,
-    Rarity.RARE: 1000,
-    Rarity.LEGENDARY: 5000,
+    Rarity.RARE: 15,
+    Rarity.LEGENDARY: 25,
 }
+RARITY_PRICE_SATS = RARITY_PRICE  # alias for backward compat
 
 # Dirichlet prior — base probability vector BEFORE seeing thought content.
 # [common, uncommon, rare, legendary] — the "default odds" of any summon.
