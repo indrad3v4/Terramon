@@ -27,6 +27,7 @@ from dataclasses import dataclass
 
 from terramon.ports.publish_port import PublishPort, PublishResult, ShareCard
 from terramon.events.agent_summoned import AgentSummoned
+from terramon.events.creature_released import CreatureReleased
 
 log = logging.getLogger("terramon.nostr")
 
@@ -165,6 +166,9 @@ class NostrPublisher(PublishPort):
         if not self.seckey_hex:
             raise RuntimeError("Nostr not configured: set NOSTR_SECKEY (32-byte hex)")
         tags = [["t", t] for t in card.tags]
+        # I11: embed geo coordinates as Nostr "g" tags (standard location tag)
+        if card.lat or card.lon:
+            tags.append(["g", f"{card.lat:.6f}", f"{card.lon:.6f}"])
         event = build_event(self.seckey_hex, card.to_note(), tags)
         frame = json.dumps(["EVENT", event], ensure_ascii=False)
         ok, failed = [], []
@@ -220,8 +224,120 @@ class NostrPublisher(PublishPort):
             log.exception("Nostr publish failed for AgentSummoned[%s]", event.agent_name)
 
     def subscribe(self, bus) -> None:
-        """Register the AgentSummoned handler on an EventBus."""
+        """Register handlers on an EventBus."""
         bus.subscribe(AgentSummoned, self.on_agent_summoned)
+        bus.subscribe(CreatureReleased, self.on_creature_released)
+
+    # ── I12: ReleaseCreature event ─────────────────────────────────
+
+    def on_creature_released(self, event: CreatureReleased) -> None:
+        """Handle a CreatureReleased event: publish to Nostr as a wild sighting.
+
+        Publish a ShareCard with geo tags so the creature appears on the
+        global map as a wild creature. Gracefully no-ops when Nostr is
+        unconfigured.
+        """
+        if not self.seckey_hex:
+            return  # graceful no-op when Nostr is not configured
+
+        tags = ["terramon", "wild"]
+        if event.archetype:
+            tags.append(event.archetype.lower().replace(" ", "-"))
+
+        card = ShareCard(
+            thought=(
+                f"WILD: {event.agent_name} (formerly {event.archetype}) — "
+                f"Stage {event.evolution_stage}, Lv.{event.level}. "
+                f"Released into the wild by {event.previous_owner}."
+            ),
+            agent=event.agent_name,
+            rarity=event.rarity or "common",
+            lore=f"Released at evolution stage {event.evolution_stage}",
+            tags=tags,
+            lat=event.lat,
+            lon=event.lon,
+        )
+        try:
+            result = self.publish(card)
+            log.info(
+                "Nostr published CreatureReleased[%s] id=%s ok=%d failed=%d",
+                event.agent_name, result.event_id,
+                len(result.relays_ok), len(result.relays_failed),
+            )
+        except Exception:
+            log.exception("Nostr publish failed for CreatureReleased[%s]", event.agent_name)
+
+    # ── P3 M04: TradeOffer (kind 40000) ──────────────────────────────
+
+    def publish_trade_offer(
+        self,
+        creature_id: str,
+        agent_name: str,
+        rarity: str,
+        thought: str,
+        price_sats: int,
+        created_at: int | None = None,
+    ) -> PublishResult:
+        """Publish a TradeOffer event (kind 40000) advertising a creature for sale.
+
+        Event format:
+          kind: 40000
+          tags:
+            - ["d", <creature_id>]   — unique trade offer identifier
+            - ["agent", <name>]       — creature agent name
+            - ["rarity", <tier>]      — creature rarity
+            - ["price", <sats>]       — asking price in satoshis/stars
+            - ["t", "terramon"]       — discovery tag
+            - ["t", "trade-offer"]    — trade category tag
+          content: creature thought / description
+
+        The event is signed with the publisher's Nostr key so buyers can
+        verify authenticity on-chain.
+        """
+        if not self.seckey_hex:
+            raise RuntimeError("Nostr not configured: set NOSTR_SECKEY (32-byte hex)")
+
+        tags = [
+            ["d", creature_id],
+            ["agent", agent_name],
+            ["rarity", rarity],
+            ["price", str(price_sats)],
+            ["t", "terramon"],
+            ["t", "trade-offer"],
+        ]
+        content = f"{rarity.upper()} — {agent_name}: \"{thought}\" — {price_sats} sats"
+        event = build_event(self.seckey_hex, content, tags, kind=40000, created_at=created_at)
+        frame = json.dumps(["EVENT", event], ensure_ascii=False)
+        ok, failed = [], []
+        for relay in self.relays:
+            try:
+                self._send(relay, frame)
+                ok.append(relay)
+            except Exception:
+                failed.append(relay)
+        return PublishResult(event_id=event["id"], relays_ok=ok, relays_failed=failed)
+
+
+def build_trade_offer_event(
+    seckey_hex: str, creature_id: str, agent_name: str,
+    rarity: str, thought: str, price_sats: int,
+    created_at: int | None = None,
+) -> dict:
+    """Build a fully signed TradeOffer Nostr event (kind 40000) without publishing.
+
+    Useful for tests and offline signing. Returns the event dict ready to
+    broadcast.
+    """
+    tags = [
+        ["d", creature_id],
+        ["agent", agent_name],
+        ["rarity", rarity],
+        ["price", str(price_sats)],
+        ["t", "terramon"],
+        ["t", "trade-offer"],
+    ]
+    content = f'{rarity.upper()} — {agent_name}: "{thought}" — {price_sats} sats'
+    return build_event(seckey_hex, content, tags, kind=40000, created_at=created_at)
 
 
 def _websocket_send(relay: str, frame: str) -> None:

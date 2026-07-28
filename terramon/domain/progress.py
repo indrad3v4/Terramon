@@ -195,6 +195,10 @@ class PlayerProgress:
     last_reached_tier_badge: str = ""
     last_reached_tier_unlock: str = ""
 
+    # I09: Summon streak counter — tracks consecutive daily summons
+    summon_streak: int = 0
+    last_summon_date: str = ""  # "YYYY-MM-DD" format
+
     @property
     def level(self) -> int:
         """Level derived from total XP (1-indexed). Uses math_utils for consistency."""
@@ -309,6 +313,63 @@ class PlayerProgress:
             self.journey_phase = "transformation"
         elif self.distinct_count >= 3:
             self.journey_phase = "threshold"
+
+    def update_streak(self, today: str) -> None:
+        """I09: Update summon streak based on today's date.
+
+        Args:
+            today: Date string in "YYYY-MM-DD" format.
+
+        Rules:
+            - No previous summon -> streak = 1
+            - Same day -> no change (multiple summons same day don't inflate streak)
+            - Consecutive day (yesterday) -> streak += 1
+            - Gap >1 day -> reset to 1
+        """
+        if not self.last_summon_date:
+            self.summon_streak = 1
+        elif self.last_summon_date == today:
+            pass  # Same day — streak unchanged
+        elif self._is_consecutive_day(self.last_summon_date, today):
+            self.summon_streak += 1
+        else:
+            self.summon_streak = 1  # Gap >1 day — reset
+        self.last_summon_date = today
+
+    @staticmethod
+    def _is_consecutive_day(last_date: str, today: str) -> bool:
+        """Check if today is the day after last_date (YYYY-MM-DD)."""
+        from datetime import datetime, timedelta
+        try:
+            last = datetime.strptime(last_date, "%Y-%m-%d").date()
+            now = datetime.strptime(today, "%Y-%m-%d").date()
+            return (now - last).days == 1
+        except (ValueError, TypeError):
+            return False
+
+    @property
+    def streak_xp_multiplier(self) -> float:
+        """I09: XP multiplier based on current streak.
+
+        - streak >= 7 -> 2.0x
+        - streak >= 3 -> 1.5x
+        - else -> 1.0x
+        """
+        if self.summon_streak >= 7:
+            return 2.0
+        if self.summon_streak >= 3:
+            return 1.5
+        return 1.0
+
+    @property
+    def rare_probability_boost(self) -> float:
+        """I09: Additional rare probability when streak >= 7.
+
+        Returns 0.05 (5%) if streak >= 7, else 0.0.
+        """
+        if self.summon_streak >= 7:
+            return 0.05
+        return 0.0
 
     def award(self, creature: str, rarity: Rarity) -> int:
         """Add a creature + its XP. Returns XP gained this turn."""

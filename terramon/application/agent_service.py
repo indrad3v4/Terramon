@@ -63,6 +63,10 @@ class AgentService:
     def evolve(self, agent: CreatureAgent) -> AgentMessage:
         return agent.evolve()
 
+    def release(self, agent: CreatureAgent) -> AgentMessage:
+        """Release a creature into the wild. Only works at evolution_stage >= 2."""
+        return agent.release()
+
     # ── Bond persistence helpers ───────────────────────────────────────
 
     def bond_data_from_agent(self, agent: CreatureAgent) -> dict:

@@ -17,3 +17,4 @@ data/creatures/
 data/creature_*.png
 frontend.zip
 .railway/
+.github/workflows/ci.yml

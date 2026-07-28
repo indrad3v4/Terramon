@@ -20,10 +20,12 @@ from collections.abc import Callable
 from terramon.application.intent_router import IntentRouter
 from terramon.application.payment_gate import PaymentGate
 from terramon.application.insight_engine import extract_insight
+from terramon.application.k3_insight_engine import extract_fusion_insight
 from terramon.domain.thought_seed import ThoughtSeed
-from terramon.domain.rarity import classify_rarity
+from terramon.domain.rarity import classify_rarity, Rarity
 from terramon.events.agent_summoned import AgentSummoned
 from terramon.events.bus import EventBus
+from terramon.events.proximity import ProximityEvent
 from terramon.ports.classifier_port import ClassifierPort
 from terramon.ports.memory_port import MemoryPort
 from terramon.ports.payment_port import PaymentPort
@@ -47,6 +49,7 @@ class SummonService:
         payment: PaymentPort | None = None,
         rarity_classifier=classify_rarity,
         min_interval: float = _MIN_SUMMON_INTERVAL,
+        nostr_reader: object | None = None,
     ) -> None:
         """Wire the ports and event bus.
 
@@ -59,6 +62,9 @@ class SummonService:
             rarity_classifier: Rarity classification function.
             min_interval: Minimum seconds between summons from the same
                           player (anti-spam). 0 = no rate limit.
+            nostr_reader: Optional NostrRelayReader for cross-player proximity
+                          detection. When provided, the proximity check queries
+                          relays for nearby creatures after each summon.
         """
         self.router = IntentRouter(classifier)
         self.memory = memory
@@ -68,6 +74,7 @@ class SummonService:
         self.rarity_classifier = rarity_classifier
         self._min_interval = min_interval
         self._last_summon_time: float = 0.0
+        self.nostr_reader = nostr_reader
 
     def _check_rate_limit(self) -> None:
         """Enforce minimum interval between summons. Raises RuntimeError if too fast."""
@@ -100,16 +107,106 @@ class SummonService:
             return None
         return emb
 
-    def summon(self, raw_input: str) -> ThoughtSeed:
+    def _check_proximity(self, seed: ThoughtSeed) -> None:
+        """Check if the newly summoned creature is near any other creature.
+
+        Queries both local memory and (optionally) Nostr relays for creatures
+        within 1 km of the seed's location. For each nearby creature found,
+        publishes a ProximityEvent on the event bus.
+
+        This is a best-effort check — failures in relay queries or missing
+        geo data are silently ignored so they never crash the summon flow.
+        """
+        if not seed.lat and not seed.lon:
+            return  # no geo data — skip proximity check
+
+        timestamp = self.clock()
+
+        # 1) Check local memory for nearby creatures (same player's collection)
+        try:
+            local_nearby = self.memory.find_nearby(seed.lat, seed.lon, radius_km=1.0)
+        except Exception:
+            log.exception("Local proximity check failed")
+            local_nearby = []
+
+        for other_seed, dist_km in local_nearby:
+            # Skip self-match
+            if (other_seed.lat == seed.lat and other_seed.lon == seed.lon
+                    and other_seed.timestamp == seed.timestamp):
+                continue
+            other_archetype = ""
+            if other_seed.insight and other_seed.insight.archetype:
+                other_archetype = other_seed.insight.archetype
+            self.bus.publish(ProximityEvent(
+                agent_name=seed.summoned_agent,
+                other_agent_name=other_seed.summoned_agent,
+                lat=seed.lat,
+                lon=seed.lon,
+                distance_km=round(dist_km, 4),
+                timestamp=timestamp,
+                other_archetype=other_archetype,
+                other_rarity=other_seed.rarity,
+                other_insight=other_seed.insight,
+                is_cross_player=False,
+            ))
+
+        # 2) Check Nostr relay for cross-player creatures
+        if self.nostr_reader is not None:
+            try:
+                # Use a 1-degree bounding box (~110 km) as a coarse pre-filter;
+                # the reader filters by bounding box internally.
+                relay_creatures = self.nostr_reader.fetch_region_creatures(
+                    seed.lat, seed.lon, radius_deg=0.01  # ~1 km
+                )
+            except Exception:
+                log.exception("Nostr relay proximity query failed")
+                relay_creatures = []
+
+            for creature in relay_creatures:
+                # Haversine distance to the relay creature
+                dist = self._haversine_km(seed.lat, seed.lon, creature.lat, creature.lon)
+                if dist > 1.0:
+                    continue
+                self.bus.publish(ProximityEvent(
+                    agent_name=seed.summoned_agent,
+                    other_agent_name=creature.agent,
+                    other_agent_pubkey=creature.pubkey,
+                    lat=creature.lat,
+                    lon=creature.lon,
+                    distance_km=round(dist, 4),
+                    timestamp=timestamp,
+                    other_rarity=creature.rarity,
+                    is_cross_player=True,
+                ))
+
+    @staticmethod
+    def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+        """Haversine distance in km between two lat/lon points."""
+        import math
+        R = 6371.0
+        dlat = math.radians(lat2 - lat1)
+        dlon = math.radians(lon2 - lon1)
+        a = (math.sin(dlat / 2) ** 2 +
+             math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) *
+             math.sin(dlon / 2) ** 2)
+        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+        return R * c
+
+    def summon(self, raw_input: str, rare_boost: float = 0.0) -> ThoughtSeed:
         """Route input to an agent, persist memory, and emit a signal.
 
         Raises RuntimeError if rate limit exceeded or input is too long.
+
+        Args:
+            raw_input: The thought text to summon from.
+            rare_boost: Additional probability mass shifted to the rare tier
+                (e.g. 0.05 from streak bonus).
         """
         self._check_rate_limit()
         if len(raw_input) > MAX_INPUT_LENGTH:
             raw_input = raw_input[:MAX_INPUT_LENGTH]
         agent_name = self.router.route(raw_input)
-        rarity = self.rarity_classifier(raw_input)
+        rarity = self.rarity_classifier(raw_input, rare_boost=rare_boost)
 
         insight = extract_insight(raw_input)
 
@@ -155,6 +252,10 @@ class SummonService:
             insight=insight,
             rarity=seed.rarity,
         ))
+
+        # I11: Cross-player proximity check — find nearby creatures
+        self._check_proximity(seed)
+
         return seed
 
     def summon_paid(self, raw_input: str, proof: str) -> ThoughtSeed:
@@ -210,4 +311,74 @@ class SummonService:
             insight=seed.insight,
             rarity=seed.rarity,
         ))
+
+        # I11: Cross-player proximity check — find nearby creatures
+        self._check_proximity(seed)
+
         return seed
+
+    # ── I11: Bond bonus on proximity ─────────────────────────────────
+
+    def _on_proximity_bond_bonus(self, event: ProximityEvent) -> None:
+        """Apply a bond level bonus when two creatures are found near each other.
+
+        Increments the bond_level for both creatures in the bond store.
+        Sets bond_bonus_applied on the event so downstream handlers know
+        the bonus was already granted.
+        """
+        try:
+            # Load bond data for both creatures
+            bond_self = self.memory.load_bond(event.agent_name)
+            bond_other = self.memory.load_bond(event.other_agent_name)
+
+            # Apply +1 bond level bonus to both
+            bond_self["bond_level"] = bond_self.get("bond_level", 0) + 1
+            self.memory.save_bond(event.agent_name, bond_self)
+
+            if event.other_agent_name:
+                bond_other["bond_level"] = bond_other.get("bond_level", 0) + 1
+                self.memory.save_bond(event.other_agent_name, bond_other)
+
+            event.bond_bonus_applied = True
+            log.info(
+                "Proximity bond bonus: %s ↔ %s at %.4f km — bond_level +1 each",
+                event.agent_name, event.other_agent_name, event.distance_km,
+            )
+        except Exception:
+            log.exception("Failed to apply proximity bond bonus")
+
+    def subscribe_proximity(self) -> None:
+        """Register handlers for proximity events on the event bus."""
+        self.bus.subscribe(ProximityEvent, self._on_proximity_bond_bonus)
+
+    def fusion(self, player_a: str, thought_a: str,
+               player_b: str, thought_b: str) -> tuple[ThoughtSeed, ThoughtSeed]:
+        """Fusion summon — two players, one fused creature."""
+        self._check_rate_limit()
+        fused_insight = extract_fusion_insight(thought_a, thought_b)
+        fused_agent = fused_insight.archetype if fused_insight.archetype else "Fusion"
+        seed_a = ThoughtSeed.make(
+            raw_input=f"[fusion: {player_a}] {thought_a}",
+            summoned_agent=fused_agent,
+            timestamp=self.clock(),
+            rarity=Rarity.FUSION, price_sats=0, paid=True,
+            insight=fused_insight,
+            birth_embedding=self._resolve_birth_embedding(fused_agent, fused_insight),
+        )
+        self.memory.save_seed(seed_a)
+        seed_b = ThoughtSeed.make(
+            raw_input=f"[fusion: {player_b}] {thought_b}",
+            summoned_agent=fused_agent,
+            timestamp=self.clock(),
+            rarity=Rarity.FUSION, price_sats=0, paid=True,
+            insight=fused_insight,
+        )
+        self.memory.save_seed(seed_b)
+        self.bus.publish(AgentSummoned(
+            f"fusion({player_a}, {player_b}): {thought_a} + {thought_b}",
+            fused_agent, seed_a.timestamp,
+            share_code=seed_a.timestamp.replace(":", "").replace("-", "").replace(".", "")[-8:],
+            archetype=fused_agent, geo_hint=seed_a.place_name,
+            insight=fused_insight, rarity="fusion",
+        ))
+        return seed_a, seed_b

@@ -93,22 +93,33 @@ _ARCHETYPE_DECAY = {
     "Ruler":     {"hunger": 0.8, "energy": 1.0, "happiness": 1.2},
 }
 
-# Per-archetype evolution requirements.
-# Archetypes that need more growth (Hero, Ruler) have higher thresholds.
-# Archetypes that grow quickly (Innocent, Orphan) evolve sooner.
+# Per-archetype evolution requirements — different paths.
+# Each archetype has a unique evolution profile reflecting its nature:
+#
+#   Fast track (low level, high happiness):
+#     Hero/Innocent/Lover — evolve quickly once emotionally bonded
+#   Experience-driven (moderate level, high XP):
+#     Orphan/Explorer — need life experiences more than levels
+#   Slow burn (high level, low happiness):
+#     Sage/Ruler — time and mastery, not emotional validation
+#   Balanced (mid-range in everything):
+#     Caregiver/Creator/Jester/Magician/Rebel — standard pace
+#
+# Default (backward compat): min_level=10, min_happiness=70,
+# min_xp_total=500, insight_diversity=3 — from EvolutionRequirement dataclass.
 _ARCHETYPE_EVOLUTION = {
-    "Hero":      {"min_level": 12, "min_happiness": 75, "min_xp_total": 600, "insight_diversity": 4},
-    "Caregiver": {"min_level": 10, "min_happiness": 80, "min_xp_total": 500, "insight_diversity": 3},
-    "Orphan":    {"min_level": 8,  "min_happiness": 65, "min_xp_total": 400, "insight_diversity": 2},
-    "Sage":      {"min_level": 8,  "min_happiness": 70, "min_xp_total": 450, "insight_diversity": 3},
-    "Rebel":     {"min_level": 11, "min_happiness": 70, "min_xp_total": 550, "insight_diversity": 3},
-    "Lover":     {"min_level": 9,  "min_happiness": 85, "min_xp_total": 450, "insight_diversity": 3},
-    "Explorer":  {"min_level": 10, "min_happiness": 70, "min_xp_total": 500, "insight_diversity": 4},
-    "Creator":   {"min_level": 9,  "min_happiness": 75, "min_xp_total": 500, "insight_diversity": 3},
-    "Jester":    {"min_level": 10, "min_happiness": 75, "min_xp_total": 500, "insight_diversity": 3},
-    "Innocent":  {"min_level": 7,  "min_happiness": 70, "min_xp_total": 350, "insight_diversity": 2},
-    "Magician":  {"min_level": 10, "min_happiness": 70, "min_xp_total": 500, "insight_diversity": 3},
-    "Ruler":     {"min_level": 12, "min_happiness": 70, "min_xp_total": 600, "insight_diversity": 4},
+    "Hero":      {"min_level": 7,  "min_happiness": 85, "min_xp_total": 500, "insight_diversity": 3},   # fast — needs high happiness
+    "Caregiver": {"min_level": 10, "min_happiness": 80, "min_xp_total": 500, "insight_diversity": 3},   # balanced — needs happiness
+    "Orphan":    {"min_level": 10, "min_happiness": 70, "min_xp_total": 600, "insight_diversity": 3},   # experience-driven — more XP
+    "Sage":      {"min_level": 15, "min_happiness": 50, "min_xp_total": 700, "insight_diversity": 4},   # slow burn — very long path
+    "Rebel":     {"min_level": 12, "min_happiness": 65, "min_xp_total": 550, "insight_diversity": 3},   # slower — resists bonding
+    "Lover":     {"min_level": 8,  "min_happiness": 90, "min_xp_total": 450, "insight_diversity": 3},   # fast — all about love
+    "Explorer":  {"min_level": 10, "min_happiness": 65, "min_xp_total": 600, "insight_diversity": 4},   # experience-driven + diversity
+    "Creator":   {"min_level": 9,  "min_happiness": 75, "min_xp_total": 550, "insight_diversity": 3},   # slightly fast — moderate
+    "Jester":    {"min_level": 10, "min_happiness": 75, "min_xp_total": 500, "insight_diversity": 3},   # balanced — needs joy
+    "Innocent":  {"min_level": 7,  "min_happiness": 80, "min_xp_total": 400, "insight_diversity": 2},   # fast — pure, low XP
+    "Magician":  {"min_level": 11, "min_happiness": 70, "min_xp_total": 550, "insight_diversity": 3},   # slightly slow — mastery
+    "Ruler":     {"min_level": 14, "min_happiness": 60, "min_xp_total": 650, "insight_diversity": 4},   # slow burn — power needs time
 }
 
 # Interaction deltas — base values (before state modifiers)
@@ -314,6 +325,16 @@ class CreatureAgent:
 
     # ── I04: Squad resonance reference ───────────────────────────────
     squad: Optional[Squad] = None
+
+    # ── I10: Auto-care while away — terra caretaker ───────────────────
+    stasis_active: bool = False
+    stasis_activated_at: float = 0.0  # epoch time when stasis was activated
+    stasis_cooldown_until: float = 0.0  # epoch time when stasis can be used again
+    grazed_while_away: bool = False  # set True by _apply_tick when auto-graze triggers
+
+    # ── I12: Release mechanic — creature goes into the wild ─────────
+    released: bool = False
+    release_timestamp: float = 0.0
 
     @property
     def resonance_bonus_stats(self) -> dict[str, int]:
@@ -546,6 +567,11 @@ class CreatureAgent:
         the creature enters a "terra rest" state where decay halves. The creature
         is not being punished for absence — it is conserving energy naturally.
 
+        I10: Auto-graze — when happiness >= 70 at tick time, the creature grazes
+        on the terra, halving its stat decay (halved loss rate).
+        I10: Stasis — when stasis_active is True, all decay is paused. Stasis
+        auto-deactivates after 24 hours from activation.
+
         Args:
             day_phase: One of "morning", "afternoon", "evening", "night".
                        Auto-detects from time_tool if None.
@@ -554,6 +580,34 @@ class CreatureAgent:
         if day_phase is None:
             from tools.time_tool import get_day_phase
             day_phase = get_day_phase()
+
+        # ── I10: Auto-deactivate stasis after 24h ─────────────────────
+        if self.stasis_active and time.time() >= self.stasis_activated_at + 86400:
+            self.stasis_active = False
+
+        # ── I10: Stasis — pause all decay ─────────────────────────────
+        if self.stasis_active:
+            # Still compute state/mood and record snapshot, but no decay
+            self.state = self._compute_state()
+            self.mood = self._compute_mood()
+            from tools.time_tool import get_current_time
+            snapshot = StateSnapshot(
+                timestamp=get_current_time(),
+                state=self.state.value,
+                hunger=self.hunger,
+                energy=self.energy,
+                happiness=self.happiness,
+                mood=self.mood,
+            )
+            self.state_history.append(snapshot)
+            if len(self.state_history) > 50:
+                self.state_history = self.state_history[-50:]
+            # Stasis auto-resets dormant_ticks tracking
+            if self.hunger == 0 and self.energy == 0 and self.happiness == 0:
+                self.dormant_ticks += 1
+            else:
+                self.dormant_ticks = 0
+            return self._check_urgent_needs()
 
         # ── Lens #73: Track consecutive ticks without player interaction ──
         self.ticks_without_interaction += 1
@@ -570,10 +624,15 @@ class CreatureAgent:
         # the creature enters terra-rest: decay halves.
         grace_mult = 0.5 if self.ticks_without_interaction > 4 else 1.0
 
+        # ── I10: Auto-graze — when happiness >= 70, decay halves ──────
+        graze_mult = 0.5 if self.happiness >= 70 else 1.0
+        self.grazed_while_away = graze_mult < 1.0
+
         def _grace_decay(val: int, modifier: float = 1.0) -> int:
             # modifier scales the LOSS rate: >1.0 = faster decay, <1.0 = slower decay
-            # val * (1 - (1 - DECAY_FACTOR) * modifier)
-            effective_factor = 1.0 - (1.0 - DECAY_FACTOR) * modifier
+            # graze_mult further halves the loss rate when happy
+            effective_modifier = modifier * graze_mult
+            effective_factor = 1.0 - (1.0 - DECAY_FACTOR) * effective_modifier
             raw = int(val * effective_factor)
             if grace_mult < 1.0:
                 # Blend: half normal decay, half "sustained by terra"
@@ -659,6 +718,25 @@ class CreatureAgent:
 
         return result
 
+    # ── I10: Stasis methods ───────────────────────────────────────────
+
+    def activate_stasis(self) -> bool:
+        """Activate stasis mode — pause all decay for 24h.
+
+        Returns True if stasis was activated, False if still on cooldown.
+        Cooldown: 7 days from activation.
+        """
+        if time.time() < self.stasis_cooldown_until:
+            return False
+        self.stasis_active = True
+        self.stasis_activated_at = time.time()
+        self.stasis_cooldown_until = time.time() + 7 * 86400  # 7 days
+        return True
+
+    def deactivate_stasis(self) -> None:
+        """Manually deactivate stasis mode early (cooldown stays set)."""
+        self.stasis_active = False
+
     def _compute_state(self) -> CreatureState:
         """Determine current state based on stat thresholds.
 
@@ -736,6 +814,42 @@ class CreatureAgent:
             f"✦ {stage_name}! It shimmers and transforms. "
             f"A deeper knowing fills its eyes.",
             "evolution", 10
+        )
+
+    # -- I12: Release --
+
+    def release(self) -> AgentMessage:
+        """Release the creature into the wild.
+
+        Only creatures at evolution_stage >= 2 can be released.
+        The creature becomes wild — removed from the player's active terra
+        but lives on as a wild creature visible on the global map.
+        """
+        if self.evolution_stage < 2:
+            return self._make_message(
+                "Not ready yet. This creature has not fully matured. "
+                "Evolve it to stage 2 first.",
+                "response", 2
+            )
+        if self.released:
+            return self._make_message(
+                "This creature has already been released into the wild.",
+                "response", 2
+            )
+        self.released = True
+        self.release_timestamp = time.time()
+
+        self._record_milestone(
+            f"★ Released into the wild at stage {self.evolution_stage}! "
+            f"Journey phase: {self.journey_phase}"
+        )
+
+        return self._make_message(
+            f"It looks at you one last time — a long, knowing look. "
+            f"Then it turns and walks into the terra, becoming part of "
+            f"the wild. Free.\n\n"
+            f"'★ Wild Tamer' badge unlocked.",
+            "response", 10
         )
 
     # -- Internal --

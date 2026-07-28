@@ -25,6 +25,9 @@ class ShareCard:
     Mirrors what the TMA renders: the player's own words become the creature's
     body, tagged with archetype + rarity. `content` is the human-readable note;
     `tags` are protocol hashtags for discovery.
+
+    I11: lat/lon anchor the creature on the global map. Each MINT event
+    carries geo coordinates so Nostr relays become the global creature registry.
     """
 
     thought: str
@@ -32,6 +35,8 @@ class ShareCard:
     rarity: str
     lore: str = ""
     tags: list[str] = field(default_factory=lambda: ["terramon"])
+    lat: float = 0.0
+    lon: float = 0.0
 
     def to_note(self) -> str:
         """Render the note body a follower actually sees."""

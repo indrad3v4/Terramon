@@ -550,10 +550,13 @@ def test_apply_tick_day_night_modifier(agent: CreatureAgent) -> None:
 
 
 def test_tick_gradient_clip_max_delta_15(agent: CreatureAgent) -> None:
-    """Gradient clipping caps max stat change at MAX_DELTA_PER_TICK (15)."""
+    """Gradient clipping caps max stat change at MAX_DELTA_PER_TICK (15).
+
+    I10: happiness set to 50 (<70) so auto-graze doesn't interfere with clip test.
+    """
     agent.hunger = 550
     agent.energy = 550
-    agent.happiness = 550
+    agent.happiness = 50  # below auto-graze threshold (I10)
     agent.state = CreatureState.HAPPY
     agent.dormant_ticks = 0
 
@@ -852,10 +855,10 @@ def test_hero_archetype_has_correct_starting_stats() -> None:
 def test_hero_archetype_has_custom_evolution_requirements() -> None:
     """Hero archetype gets custom evolution requirements."""
     hero = CreatureAgent(agent_id="h", archetype="Hero")
-    assert hero.evolution_requirement.min_level == 12
-    assert hero.evolution_requirement.min_happiness == 75
-    assert hero.evolution_requirement.min_xp_total == 600
-    assert hero.evolution_requirement.insight_diversity == 4
+    assert hero.evolution_requirement.min_level == 7
+    assert hero.evolution_requirement.min_happiness == 85
+    assert hero.evolution_requirement.min_xp_total == 500
+    assert hero.evolution_requirement.insight_diversity == 3
 
 
 def test_scout_archetype_keeps_defaults() -> None:

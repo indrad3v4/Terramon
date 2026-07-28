@@ -94,3 +94,17 @@ class PaymentGate:
     @staticmethod
     def is_free(rarity: Rarity) -> bool:
         return rarity in (Rarity.COMMON, Rarity.UNCOMMON)
+
+    @staticmethod
+    def compute_min_trade_price(embedding_uniqueness_score: float, base_price_sats: int) -> int:
+        """Compute the minimum trade price for a creature.
+
+        Formula: min_price = embedding_uniqueness_score × base_price
+
+        embedding_uniqueness_score: float in [1.0, 10.0] from compute_uniqueness_bonus
+        base_price_sats: base price from rarity tier (e.g. 15 for rare, 25 for legendary)
+
+        Returns the minimum price as an integer (ceil to nearest sat).
+        """
+        import math
+        return math.ceil(embedding_uniqueness_score * base_price_sats)

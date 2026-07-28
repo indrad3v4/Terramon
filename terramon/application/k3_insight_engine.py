@@ -764,6 +764,112 @@ def long_context_insight(thoughts: list[str],
 
 
 # ---------------------------------------------------------------------------
+# Fusion insight — two players, one creature (P3 M03: Fusion Summon)
+# ---------------------------------------------------------------------------
+
+def extract_fusion_insight(t1: str,
+                           t2: str,
+                           geo: Optional[GeoContext] = None,
+                           top_k: Optional[int] = None,
+                           thinking_steps: int = 1,
+                           use_reasoning_chain: bool = False) -> Insight:
+    """Fusion insight — average two thought embeddings into one fused creature.
+
+    Takes two player thoughts, encodes each as a 64-dim vector, averages
+    the embeddings (fused_vector = (emb_a + emb_b) / 2), then runs the
+    fused vector through the MoE network to derive a single fused archetype
+    insight. The result represents a 'fusion summon' — two players, one
+    creature.
+
+    The returned Insight has its nuance marked with ``fusion: True`` so the
+    persistence layer can tag the record.
+
+    Args:
+        t1: First player's thought text.
+        t2: Second player's thought text.
+        geo: Optional GeoContext for geographic anchoring.
+        top_k: Optional sparse MoE top-k parameter.
+        thinking_steps: Test-time compute steps.
+        use_reasoning_chain: Whether to use iterative reasoning.
+
+    Returns:
+        Insight with the winning archetype for the fused context.
+    """
+    from terramon.application.insight_engine import encode as old_encode
+
+    # Encode both thoughts
+    e1 = old_encode(t1)
+    e2 = old_encode(t2)
+
+    # Average: fused_vector = (emb_a + emb_b) / 2
+    n = min(len(e1), len(e2), 64)
+    fused = [(e1[i] + e2[i]) / 2.0 for i in range(n)]
+
+    # Re-normalize
+    from terramon.application.math_utils import normalize
+    fused = normalize(fused)
+
+    net = _get_net()
+    winner, probs, _ = net.forward(
+        fused,
+        top_k=top_k,
+        thinking_steps=thinking_steps,
+        use_reasoning_chain=use_reasoning_chain,
+    )
+
+    theme = _THEME_NAMES[winner]
+    confidence = round(probs[winner] * 100)
+
+    parts = [f"fusion: True | fusion of two thoughts → {theme}"]
+    if top_k is not None:
+        parts.append(f"top-{top_k}")
+    if thinking_steps > 1:
+        parts.append(f"{thinking_steps} steps")
+    nuance = " | ".join(parts)
+
+    driver = _DRIVER_BY_THEME.get(theme, "to be met where you are")
+    barrier = _BARRIER_BY_THEME.get(theme, "the quiet ordinary")
+    therefore = _BEHAVIOR_BY_BARRIER.get(barrier, _BEHAVIOR_BY_BARRIER["the quiet ordinary"])
+
+    # Produce a 512-dim embedding for the fused creature
+    text_seed = f"fusion ({t1[:20]} + {t2[:20]}) → {theme}"
+    from terramon.adapters.embedding_classifier import _encode as _ec_encode
+    _idf = None
+    try:
+        from terramon.adapters.embedding_classifier import EmbeddingClassifier
+        _idf = EmbeddingClassifier()._idf
+    except Exception:
+        pass
+    embedding = _ec_encode(text_seed, idf=_idf, geo=geo)
+
+    # P1-T02: Try LLM-generated THEREFORE from embedding
+    try:
+        from terramon.application.llm_behavior import (
+            generate_llm_therefore,
+            has_api_key,
+        )
+        if has_api_key():
+            llm_therefore = generate_llm_therefore(
+                embedding, theme.title(), geo
+            )
+            if llm_therefore:
+                therefore = llm_therefore
+    except Exception:
+        pass
+
+    return Insight(
+        driver=driver,
+        barrier=barrier,
+        therefore=therefore,
+        archetype=theme.title(),
+        nuance=nuance,
+        geo=geo,
+        confidence=confidence,
+        embedding=embedding,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Training loop — Phase 3 demo: Weight Init, Adam, Cosine LR, Eval
 # ---------------------------------------------------------------------------
 

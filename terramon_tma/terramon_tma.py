@@ -45,7 +45,8 @@ from pathlib import Path
 
 from terramon.adapters.embedding_classifier import EmbeddingClassifier
 from terramon.adapters.json_memory import JsonMemory
-from terramon.application.game_loop import GameLoop
+from terramon.application.game_loop import GameLoop, TurnResult
+from terramon.application.geo_tournament import GeoTournamentService
 from terramon.application.summon_service import SummonService
 from terramon.domain.progress import PlayerProgress, XP_BY_RARITY
 from terramon.domain.rarity import Rarity
@@ -83,7 +84,9 @@ _SERVICE = SummonService(
     bus=EventBus(),  # fire-and-forget; no subscriber needed in TMA
     clock=get_current_time,
 )
-_LOOP = GameLoop(_SERVICE, PlayerProgress(goal_distinct=5))
+_TOURNAMENT_SVC = GeoTournamentService()
+_LOOP = GameLoop(_SERVICE, PlayerProgress(goal_distinct=5),
+                 tournament_service=_TOURNAMENT_SVC)
 
 # Agent service for creature interaction (Tamagotchi×Pokemon)
 _AGENT_SVC = AgentService(_MEMORY)
@@ -230,6 +233,10 @@ class TerramonState(rx.State):
     scout_result: str = ""
     scout_running: bool = False
 
+    # G04: Birthplace lat/lon for static map
+    agent_lat: float = 0.0
+    agent_lon: float = 0.0
+
     # The player's terra: every creature that ever lived (persisted).
     terra: list[dict] = []
 
@@ -239,10 +246,59 @@ class TerramonState(rx.State):
     # Onboarding tutorial (shown once per first visit)
     show_tutorial: bool = True
 
+    # I09: Summon streak counter
+    summon_streak: int = 0
+
+    # I11 — Global creature map
+    global_creatures: list[dict] = []
+    selected_region: str = ""
+    region_creatures: list[dict] = []
+    map_loading: bool = False
+
+    # I10: Auto-care while away — terra caretaker
+    stasis_active: bool = False
+    stasis_cooldown_until: float = 0.0  # epoch; 0 = available
+    grazed_away_message: str = ""  # shown on return after auto-graze
+
+    # M02: Geo-tournament state
+    tournament_id: str = ""  # battle_id of the latest tournament offer
+    tournament_archetype: str = ""  # archetype that triggered the offer
+    tournament_status: str = ""  # pending | accepted | declined | completed | expired
+    tournament_offer_text: str = ""  # human-readable offer description
+    tournament_score_a: float = 0.0
+    tournament_score_b: float = 0.0
+    tournament_winner_id: str = ""
+    tournament_xp_gained: int = 0
+    tournament_count: int = 0  # total battles participated in
+
+    # I12: Release mechanic — creature goes into the wild
+    show_release_dialog: bool = False
+    wild_tamer_badge: bool = False
+
+    # P3 M04: Creature trading
+    show_trade_dialog: bool = False
+    trade_target_id: int = 0
+    trade_target_name: str = ""
+    trade_target_rarity: str = ""
+    trade_price_input: str = ""
+    trade_min_price: int = 0
+    trade_message: str = ""
+    trade_listings: list[dict] = []
+
     @rx.var
     def xp_into_level(self) -> int:
         """XP progress within the current level (0-100) for the XP bar."""
         return self.xp % 100
+
+    @rx.var
+    def static_map_url(self) -> str:
+        """G04: OpenStreetMap static map URL for birthplace, or empty if no coords."""
+        if self.agent_lat != 0.0 or self.agent_lon != 0.0:
+            return (
+                f"https://staticmap.openstreetmap.de/staticmap.php?"
+                f"center={self.agent_lat},{self.agent_lon}&zoom=14&size=300x200"
+            )
+        return ""
 
     @rx.var
     def rarity_glow_style(self) -> str:
@@ -284,10 +340,33 @@ class TerramonState(rx.State):
             self.color = _RARITY_COLOR[rarity]
             self.lore = _ARCHETYPE_LORE.get(result.agent, "A thought made flesh.")
             self.price_sats = result.price_sats
+            # M02: Geo-tournament offer state
+            self.tournament_id = result.tournament_id
+            self.tournament_archetype = result.tournament_archetype
+            if result.tournament_id:
+                battle = _TOURNAMENT_SVC.get_battle(result.tournament_id)
+                if battle:
+                    self.tournament_status = battle.status.value
+                    self.tournament_offer_text = (
+                        f"⚔️ Geo-tournament: Your {result.tournament_archetype} "
+                        f"faces another {result.tournament_archetype} nearby! "
+                        f"Accept to battle for XP!"
+                    )
+                else:
+                    self.tournament_status = ""
+                    self.tournament_offer_text = ""
+            else:
+                self.tournament_status = ""
+                self.tournament_offer_text = ""
+            self.tournament_score_a = 0.0
+            self.tournament_score_b = 0.0
+            self.tournament_winner_id = ""
+            self.tournament_xp_gained = 0
             self.xp = _LOOP.progress.xp
             self.level = _LOOP.progress.level
             self.distinct = _LOOP.progress.distinct_count
             self.goal = _LOOP.progress.goal_distinct
+            self.summon_streak = _LOOP.progress.summon_streak
             self.goal_reached = result.goal_reached
             self.has_summoned = True
             self.summon_count += 1
@@ -299,8 +378,12 @@ class TerramonState(rx.State):
             else:
                 self.insight = ""
             self.place = ""
+            self.agent_lat = 0.0
+            self.agent_lon = 0.0
             if seeds and seeds[-1].insight and seeds[-1].insight.geo:
                 g = seeds[-1].insight.geo
+                self.agent_lat = g.lat
+                self.agent_lon = g.lon
                 self.place = g.place_name or f"{g.lat:.2f}, {g.lon:.2f}"
         except Exception as e:
             log.error(f"take_turn failed: {e}", exc_info=True)
@@ -460,6 +543,14 @@ class TerramonState(rx.State):
         except Exception as e:
             log.warning(f"Terra reload failed: {e}")
 
+        # I07: Haptic feedback — SUMMON → medium
+        try:
+            yield rx.call_script(
+                'Telegram.WebApp.HapticFeedback.impactOccurred("medium")'
+            )
+        except Exception:
+            pass
+
         self.summoning = False
 
         # Phase 2: FAL.ai creature portrait (background, silent fail)
@@ -505,13 +596,121 @@ class TerramonState(rx.State):
 
     @rx.event
     def set_tab(self, tab: str):
-        """Toggle bottom nav tab: clicking active tab closes it."""
+        """Toggle bottom nav tab: clicking active tab closes it.
+        Auto-loads global map data when the map tab is selected."""
         self.active_tab = tab if self.active_tab != tab else ""
+        # I11: auto-fetch global map data when map tab opens
+        if self.active_tab == "map" and not self.global_creatures:
+            # Defer so the UI updates first, then fetch starts
+            yield
+            yield TerramonState.load_global_map
 
     @rx.event
     def dismiss_tutorial(self):
         """Close the first-time onboarding overlay."""
         self.show_tutorial = False
+
+    # ── I11: Global creature map ────────────────────────────────────
+
+    @rx.event
+    def load_global_map(self):
+        """Fetch creature locations from Nostr relays for the global map.
+
+        Runs in a background thread; updates global_creatures when done.
+        Falls back gracefully to local-only markers when relays are unreachable.
+        """
+        if self.map_loading:
+            return
+        self.map_loading = True
+        import threading
+
+        def _fetch():
+            try:
+                from terramon.adapters.nostr_reader import NostrRelayReader
+                reader = NostrRelayReader(timeout=3)
+                creatures = reader.fetch_global_creatures(max_events=200)
+                self.global_creatures = [
+                    {
+                        "event_id": c.event_id,
+                        "lat": c.lat,
+                        "lon": c.lon,
+                        "agent": c.agent,
+                        "thought": c.thought,
+                        "rarity": c.rarity,
+                        "timestamp": c.timestamp,
+                        "region_key": c.region_key,
+                    }
+                    for c in creatures
+                ]
+            except Exception as e:
+                log.warning("Global map fetch failed: %s", e)
+            finally:
+                self.map_loading = False
+
+        threading.Thread(target=_fetch, daemon=True).start()
+
+    @rx.event
+    def select_region(self, region_key: str):
+        """Select a region on the global map and show its creatures."""
+        self.selected_region = region_key
+        if not region_key:
+            self.region_creatures = []
+            return
+        # Filter global creatures by this 5-degree grid cell
+        self.region_creatures = [
+            c for c in self.global_creatures
+            if c.get("region_key") == region_key
+        ]
+
+    @rx.var
+    def map_heatmap_data(self) -> str:
+        """Build a density heatmap JSON for Leaflet's heatmap layer.
+
+        Returns a JSON string of [lat, lon, intensity] tuples grouped
+        by 5-degree grid cells. Used by the Leaflet heatmap overlay.
+        """
+        if not self.global_creatures:
+            return "[]"
+        from collections import Counter
+        # Count creatures per region_key
+        regions: Counter = Counter()
+        cell_centers: dict[str, tuple[float, float]] = {}
+        for c in self.global_creatures:
+            rk = c.get("region_key", "")
+            if not rk:
+                continue
+            regions[rk] += 1
+            if rk not in cell_centers:
+                parts = rk.split("_")
+                try:
+                    center_lat = int(parts[0]) + 2.5
+                    center_lon = int(parts[1]) + 2.5
+                    cell_centers[rk] = (center_lat, center_lon)
+                except (ValueError, IndexError):
+                    continue
+        import json as _json
+        heatmap = [
+            [lat, lon, min(count / max(regions.values()), 1.0)]
+            for rk, count in regions.most_common(50)
+            for (lat, lon) in [cell_centers.get(rk, (0, 0))]
+        ]
+        return _json.dumps(heatmap)
+
+    @rx.var
+    def map_marker_json(self) -> str:
+        """Build JSON array of creature markers for Leaflet.
+
+        Returns a JSON string of [lat, lon, agent, thought] tuples
+        for creatures with valid geo data. Limited to first 100 to
+        keep the marker layer performant.
+        """
+        import json as _json
+        markers = [
+            [c["lat"], c["lon"], c.get("agent", ""), c.get("thought", "")]
+            for c in self.global_creatures[:100]
+            if c.get("lat") and c.get("lon")
+        ]
+        return _json.dumps(markers)
 
     @rx.event
     def dismiss_celebration(self):
@@ -539,6 +738,13 @@ class TerramonState(rx.State):
         self.agent_energy = min(100, self.agent_energy + 5)
         self.agent_message = msg.text
         self._recompute_creature_state()
+        # I07: Haptic feedback — FEED → light
+        try:
+            yield rx.call_script(
+                'Telegram.WebApp.HapticFeedback.impactOccurred("light")'
+            )
+        except Exception:
+            pass
 
     @rx.event
     def play_with_agent(self):
@@ -549,6 +755,13 @@ class TerramonState(rx.State):
                               energy=self.agent_energy, happiness=self.agent_happiness))
         self.agent_message = msg.text
         self._recompute_creature_state()
+        # I07: Haptic feedback — PLAY → light
+        try:
+            yield rx.call_script(
+                'Telegram.WebApp.HapticFeedback.impactOccurred("light")'
+            )
+        except Exception:
+            pass
 
     @rx.event
     def rest_agent(self):
@@ -583,6 +796,236 @@ class TerramonState(rx.State):
                                 level=self.level, total_xp_earned=self.xp + (self.level-1)*100))
         self.agent_message = msg.text
         self.agent_last_message = msg.text
+        # I08: Trigger evolution shimmer animation
+        self.evolve_animating = True
+        # Reset animation state after 1.5s via JS setTimeout
+        try:
+            yield rx.call_script(
+                'setTimeout(() => { try { reflex.sendEvent("clear_evolution_animation", {}); } catch(e) { console.warn("evolve reset", e); } }, 1500)'
+            )
+        except Exception:
+            pass
+
+    @rx.event
+    def clear_evolution_animation(self):
+        """Reset the evolution shimmer animation flag."""
+        self.evolve_animating = False
+
+    # ── I12: Release mechanic ───────────────────────────────────────
+
+    @rx.event
+    def show_release(self):
+        """Show the release confirmation dialog."""
+        if self.agent_evolution < 2:
+            self.agent_message = (
+                "This creature has not matured enough. "
+                "Evolve it to stage 2 first."
+            )
+            return
+        self.show_release_dialog = True
+
+    @rx.event
+    def hide_release(self):
+        """Hide the release confirmation dialog."""
+        self.show_release_dialog = False
+
+    @rx.event
+    def confirm_release(self):
+        """Release the creature into the wild.
+
+        Requirements:
+        - evolution_stage >= 2
+        - Creature not already released
+
+        On release:
+        1. Creature is removed from active care (reset stats)
+        2. It stays in terra as a memorial (read-only)
+        3. CreatureReleased event published to Nostr
+        4. ★ Wild Tamer badge awarded
+        """
+        self.show_release_dialog = False
+        if self.agent_evolution < 2:
+            self.agent_message = "Not ready. Evolve to stage 2 first."
+            return
+
+        # Perform the release via AgentService
+        try:
+            _agent = CreatureAgent(
+                agent_id=self.agent,
+                archetype=self.agent,
+                level=self.level,
+                evolution_stage=self.agent_evolution,
+                lat=self.agent_lat,
+                lon=self.agent_lon,
+                place_name=self.place,
+            )
+            msg = _AGENT_SVC.release(_agent)
+            self.agent_message = msg.text
+        except Exception as e:
+            log.warning(f"Release failed: {e}")
+            self.agent_message = "Something went wrong releasing this creature."
+
+        # Publish CreatureReleased event
+        try:
+            from terramon.events.creature_released import CreatureReleased
+            import datetime
+            _evt = CreatureReleased(
+                agent_id=self.agent,
+                agent_name=self.agent_name or self.agent,
+                archetype=self.agent,
+                thought_seed=self.thought,
+                lat=self.agent_lat,
+                lon=self.agent_lon,
+                place_name=self.place,
+                evolution_stage=self.agent_evolution,
+                level=self.level,
+                rarity=self.rarity,
+                release_timestamp=datetime.datetime.now().isoformat(),
+                previous_owner="player",
+            )
+            # Publish via Nostr publisher if configured
+            from terramon.adapters.nostr_publisher import NostrPublisher
+            _pub = NostrPublisher()
+            if _pub.seckey_hex:
+                _pub.on_creature_released(_evt)
+        except Exception as e:
+            log.warning(f"Nostr publish for release failed: {e}")
+
+        # Award ★ Wild Tamer badge
+        self.wild_tamer_badge = True
+
+        # Reset creature stats (removed from active care)
+        self.agent_hunger = 0
+        self.agent_energy = 0
+        self.agent_happiness = 0
+        self.agent_evolution = 0
+        self.agent_name = ""
+        self.agent_last_message = ""
+
+        # Mark seed as released in memory
+        try:
+            seeds = _MEMORY.load_all_seeds()
+            if seeds:
+                # Update the last matching seed's status to "released"
+                for s in reversed(seeds):
+                    if s.summoned_agent == self.agent and s.raw_input == self.thought:
+                        s.status = "released"
+                        break
+        except Exception as e:
+            log.warning(f"Failed to update seed status: {e}")
+
+        # Reload terra
+        try:
+            seeds = _MEMORY.load_all_seeds()
+            self.terra = [_seed_to_card(s) for s in seeds]
+        except Exception as e:
+            log.warning(f"Terra reload after release failed: {e}")
+
+    # ── P3 M04: Creature trading ──────────────────────────────────────
+
+    @rx.event
+    def show_trade_dialog(self, seed_id: int = 0, name: str = "", rarity: str = ""):
+        """Open the trade listing dialog for a creature.
+
+        Computes minimum price = embedding_uniqueness_score × base_price.
+        """
+        self.trade_target_id = seed_id
+        self.trade_target_name = name
+        self.trade_target_rarity = rarity
+        self.trade_price_input = ""
+        self.trade_message = ""
+
+        # Compute minimum price
+        try:
+            rarity_enum = Rarity(rarity) if rarity else Rarity.COMMON
+            from terramon.domain.rarity import RARITY_PRICE
+            base_price = RARITY_PRICE.get(rarity_enum, 0)
+            if base_price > 0:
+                # Try to get embedding uniqueness from the target seed
+                seeds = _MEMORY.load_all_seeds()
+                bonus = 1.0
+                for s in seeds:
+                    from terramon.adapters.json_memory import SqliteMemory
+                    if isinstance(_MEMORY, SqliteMemory):
+                        sid = getattr(s, 'id', None) or 0
+                        if sid == seed_id and s.insight and s.insight.embedding:
+                            bonus = _MEMORY.compute_uniqueness_bonus(s.insight.embedding)
+                            break
+                from terramon.application.payment_gate import PaymentGate
+                self.trade_min_price = PaymentGate.compute_min_trade_price(bonus, base_price)
+            else:
+                self.trade_min_price = 1  # common/uncommon minimum
+        except Exception:
+            self.trade_min_price = 1
+
+        self.show_trade_dialog = True
+
+    @rx.event
+    def hide_trade_dialog(self):
+        """Close the trade listing dialog."""
+        self.show_trade_dialog = False
+        self.trade_target_id = 0
+        self.trade_price_input = ""
+
+    @rx.event
+    def set_trade_price(self, value: str):
+        """Update the price input for a trade listing."""
+        self.trade_price_input = value
+
+    @rx.event
+    def confirm_list_for_trade(self):
+        """List the creature for trade at the specified price."""
+        price_str = self.trade_price_input.strip()
+        if not price_str or not price_str.isdigit():
+            self.trade_message = "⚠️ Enter a valid price."
+            return
+
+        price_sats = int(price_str)
+        if price_sats < self.trade_min_price:
+            self.trade_message = (
+                f"⚠️ Minimum price is {self.trade_min_price} sats "
+                f"(uniqueness bonus × base price)."
+            )
+            return
+
+        try:
+            import sqlite3
+            conn = sqlite3.connect(str(_MEMORY.path))
+            cursor = conn.execute(
+                "UPDATE seeds SET for_trade = 1, trade_price_sats = ? WHERE id = ?",
+                (price_sats, self.trade_target_id),
+            )
+            conn.commit()
+            conn.close()
+            if cursor.rowcount > 0:
+                self.trade_message = (
+                    f"✅ {self.trade_target_name} listed for {price_sats} sats!"
+                )
+                # Reload terra to reflect the updated status
+                seeds = _MEMORY.load_all_seeds()
+                self.terra = [_seed_to_card(s) for s in seeds]
+            else:
+                self.trade_message = "⚠️ Could not find creature to list."
+        except Exception as e:
+            log.warning(f"Trade listing failed: {e}")
+            self.trade_message = "⚠️ Could not list for trade."
+
+        self.show_trade_dialog = False
+
+    @rx.event
+    def load_trade_listings(self):
+        """Load trade listings from the local database."""
+        try:
+            import sqlite3
+            conn = sqlite3.connect(str(_MEMORY.path))
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT * FROM seeds WHERE for_trade = 1 ORDER BY trade_price_sats ASC"
+            ).fetchall()
+            conn.close()
+            self.trade_listings = [dict(r) for r in rows]
+        except Exception as e:
+            log.warning(f"Load trade listings failed: {e}")
 
     @rx.event
     def mint_creature(self):
@@ -590,6 +1033,25 @@ class TerramonState(rx.State):
         if not self.has_summoned or self.price_sats <= 0:
             return
         self.agent_message = f"⚡ Minting {self.agent} for {self.price_sats} Stars..."
+
+    # ── I10: Stasis caretaker ─────────────────────────────────────────
+
+    @rx.event
+    def activate_stasis(self):
+        """Activate stasis — pause all decay for 24h (7-day cooldown)."""
+        import time as _time
+        if _time.time() < self.stasis_cooldown_until:
+            self.agent_message = "⏳ Stasis is on cooldown. Wait 7 days."
+            return
+        self.stasis_active = True
+        self.stasis_cooldown_until = _time.time() + 7 * 86400
+        self.agent_message = "💤 Stasis activated. Your creature rests for 24h."
+
+    @rx.event
+    def deactivate_stasis(self):
+        """Manually deactivate stasis early."""
+        self.stasis_active = False
+        self.agent_message = "✨ Stasis deactivated. Your creature stirs."
 
     @rx.event
     def buy_stars(self):
@@ -618,12 +1080,73 @@ class TerramonState(rx.State):
         yield rx.set_clipboard(card)
         self.agent_message = "📤 Creature card copied! Share it anywhere."
 
+    # ── M02: Geo-tournament interaction ────────────────────────────────
+
+    @rx.event
+    def accept_tournament(self):
+        """Accept the pending tournament offer."""
+        if not self.tournament_id:
+            return
+        battle = _TOURNAMENT_SVC.accept(self.tournament_id, "player_default")
+        if battle:
+            self.tournament_status = battle.status.value
+            self.agent_message = "✅ Tournament accepted! Both sides ready."
+            # Both accepted → resolve automatically
+            if battle.both_accepted:
+                resolved = _TOURNAMENT_SVC.resolve(self.tournament_id)
+                if resolved:
+                    self.tournament_status = resolved.status.value
+                    self.tournament_score_a = resolved.score_a
+                    self.tournament_score_b = resolved.score_b
+                    self.tournament_winner_id = resolved.winner_id
+                    self.tournament_xp_gained = resolved.xp_awarded_to_winner
+                    self.tournament_count += 1
+                    if resolved.winner_id == "player_default":
+                        self.agent_message = (
+                            f"🏆 Tournament VICTORY! "
+                            f"+{resolved.xp_awarded_to_winner} XP!"
+                        )
+                        self.xp += resolved.xp_awarded_to_winner
+                    else:
+                        self.agent_message = (
+                            f"💪 Tournament lost. "
+                            f"+{resolved.xp_awarded_to_loser} consolation XP."
+                        )
+                        self.xp += resolved.xp_awarded_to_loser
+        else:
+            self.agent_message = "⚠️ Tournament not found or already resolved."
+
+    @rx.event
+    def decline_tournament(self):
+        """Decline the pending tournament offer."""
+        if not self.tournament_id:
+            return
+        _TOURNAMENT_SVC.decline(self.tournament_id, "player_default")
+        self.tournament_status = "declined"
+        self.tournament_id = ""
+        self.tournament_offer_text = ""
+        self.agent_message = "🚫 Tournament declined."
+
+    @rx.event
+    def dismiss_tournament(self):
+        """Dismiss a completed/expired tournament notification."""
+        self.tournament_id = ""
+        self.tournament_status = ""
+        self.tournament_offer_text = ""
+        self.tournament_score_a = 0.0
+        self.tournament_score_b = 0.0
+        self.tournament_winner_id = ""
+        self.tournament_xp_gained = 0
+
     def _apply_tick_decay(self):
         """Apply stat decay based on elapsed time (Phase 6: state machine + EMA).
 
         Uses the CreatureAgent's _apply_tick() core logic so the TMA's
         batch tick decay is consistent with the canonical implementation.
         Called from load_terra() on every app open.
+
+        I10: Passes stasis state to the temp agent and checks for auto-graze
+        to notify the player on return.
         """
         import datetime
         if not self.last_tick:
@@ -644,14 +1167,34 @@ class TerramonState(rx.State):
                 hunger=self.agent_hunger or 80,
                 energy=self.agent_energy or 80,
                 happiness=self.agent_happiness or 60,
+                # I10: Pass stasis state to survive across batch ticks
+                stasis_active=self.stasis_active,
+                stasis_activated_at=self.stasis_cooldown_until,  # not used on batch
+                stasis_cooldown_until=self.stasis_cooldown_until,
             )
+            graze_happened = False
             for _ in range(ticks):
                 temp._apply_tick(day_phase)
+                if temp.grazed_while_away:
+                    graze_happened = True
+                    temp.grazed_while_away = False  # reset for next tick
 
             self.agent_hunger = temp.hunger
             self.agent_energy = temp.energy
             self.agent_happiness = temp.happiness
             self.last_tick = datetime.datetime.now().isoformat()
+
+            # I10: Sync stasis state back (auto-deactivation during tick loop)
+            self.stasis_active = temp.stasis_active
+
+            # I10: Notify player if auto-graze happened while away
+            if graze_happened and hours > 1:
+                self.grazed_away_message = (
+                    "🌿 Your creature grazed while you were away. "
+                    "Its happiness kept it nourished."
+                )
+            else:
+                self.grazed_away_message = ""
         except (ValueError, TypeError):
             self.last_tick = datetime.datetime.now().isoformat()
 
@@ -721,35 +1264,107 @@ def _seed_to_card(seed: ThoughtSeed) -> dict:
         "lore": _ARCHETYPE_LORE.get(seed.summoned_agent, "A thought made flesh."),
         "timestamp": seed.timestamp,
         "insight": f"INSIGHT: {seed.insight.therefore}" if seed.insight else "",
+        "released": seed.status == "released",
+        # P3 M04: Trade info
+        "for_trade": getattr(seed, 'for_trade', False),
+        "trade_price_sats": getattr(seed, 'trade_price_sats', 0),
     }
-    # v2: geographic anchor — if the creature was born at a real place
+    # G04: geographic anchor — lat/lon for static map, place name fallback
     if seed.lat or seed.lon or seed.place_name:
+        card["lat"] = seed.lat
+        card["lon"] = seed.lon
         card["place"] = seed.place_name or f"{seed.lat:.2f}, {seed.lon:.2f}"
     return card
 
 
 def terra_card(item: dict) -> rx.Component:
-    """One creature in the terra grid. SIN 7 FIX: hover scale-up."""
+    """One creature in the terra grid. SIN 7 FIX: hover scale-up.
+    I12: Released creatures show with a memorial badge & muted styling.
+    P3 M04: "List for Trade" button on non-released creatures.
+    """
     return rx.box(
         rx.vstack(
+            # I12: Released badge for wild creatures
+            rx.cond(
+                item.get("released", False),
+                rx.hstack(
+                    rx.text("\U0001f54a\ufe0f", font_size="0.7em"),
+                    rx.text("WILD", font_size="0.5em", color="#6b7280",
+                            font_weight="bold", letter_spacing="0.1em"),
+                    spacing="1",
+                    align="center",
+                    background="#1a1a24",
+                    border="1px solid #27272a",
+                    border_radius="999px",
+                    padding="0.1em 0.5em",
+                ),
+                rx.fragment(),
+            ),
             rx.text(
                 item["sigil"],
                 font_size="1.8em",
                 letter_spacing="0.2em",
-                color=item["color"],
-                text_shadow=f"0 0 16px {item['color']}66",  # SIN 4: sigil glow
+                color=rx.cond(item.get("released", False), "#6b7280", item["color"]),
+                text_shadow=f"0 0 16px {item['color']}66",
             ),
-            rx.heading(item["agent"], size="5", color=item["color"]),
+            rx.heading(item["agent"], size="5",
+                       color=rx.cond(item.get("released", False), "#6b7280", item["color"])),
             rx.text(item["thought"], font_style="italic",
                     color="#9ca3af", font_size="0.75em", max_width="200px"),
-            # v2: geo anchor — show where on Earth this creature was born
+            # G04: birthplace
             rx.cond(
-                item.get("place"),
-                rx.hstack(
-                    rx.text("📍", font_size="0.7em"),
-                    rx.text(item["place"], font_size="0.65em", color="#6b7280"),
-                    spacing="1",
-                    align="center",
+                item.get("lat") and item.get("lon"),
+                rx.image(
+                    src=f"https://staticmap.openstreetmap.de/staticmap.php?center={item['lat']},{item['lon']}&zoom=14&size=280x160",
+                    width="100%",
+                    height="auto",
+                    border_radius="6px",
+                    border="1px solid #27272a",
+                    opacity=rx.cond(item.get("released", False), "0.6", "1.0"),
+                ),
+                rx.cond(
+                    item.get("place"),
+                    rx.hstack(
+                        rx.text("\U0001f4cd", font_size="0.7em"),
+                        rx.text(item["place"], font_size="0.65em", color="#6b7280"),
+                        spacing="1",
+                        align="center",
+                    ),
+                    rx.fragment(),
+                ),
+            ),
+            # P3 M04: Trade button inside the vstack (positional args before keywords)
+            rx.cond(
+                ~item.get("released", False),
+                rx.cond(
+                    item.get("for_trade", False),
+                    rx.box(
+                        rx.text(
+                            f"↔ Trading · {item.get('trade_price_sats', 0)} sats",
+                            font_size="0.55em", color="#f59e0b",
+                            font_weight="bold",
+                            background="rgba(245,158,11,0.1)",
+                            border="1px solid #f59e0b44",
+                            border_radius="999px",
+                            padding="0.1em 0.5em",
+                            margin_top="0.3em",
+                        ),
+                    ),
+                    rx.button(
+                        "↔ List for Trade",
+                        on_click=lambda: TerramonState.show_trade_dialog(
+                            item.get("id", 0),
+                            item["agent"],
+                            item["rarity"],
+                        ),
+                        size="1",
+                        variant="ghost",
+                        color_scheme="amber",
+                        font_size="0.55em",
+                        width="100%",
+                        margin_top="0.3em",
+                        _hover={"opacity": "0.8"},
+                    ),
                 ),
                 rx.fragment(),
             ),
@@ -760,10 +1375,14 @@ def terra_card(item: dict) -> rx.Component:
         border_left=f"3px solid {item['color']}",
         border_radius="12px",
         padding="0.8em",
-        background="#141418",
+        background=rx.cond(item.get("released", False), "#111115", "#141418"),
         width="100%",
-        # SIN 7: hover lift
-        _hover={"transform": "scale(1.02)", "border_color": item["color"]},
+        opacity=rx.cond(item.get("released", False), "0.7", "1.0"),
+        _hover=rx.cond(
+            item.get("released", False),
+            {},
+            {"transform": "scale(1.02)", "border_color": item["color"]},
+        ),
         style={"transition": "transform 0.15s ease, border-color 0.15s ease"},
     )
 
@@ -961,17 +1580,36 @@ def creature_card() -> rx.Component:
                 width="100%",
                 spacing="1",
             ),
-            # v2: geo anchor — show where on Earth this creature was born
+            # G04: birthplace — static map when lat/lon available, text fallback
             rx.cond(
-                TerramonState.place != "",
-                rx.hstack(
-                    rx.text("📍", font_size="0.8em"),
-                    rx.text(TerramonState.place, font_size="0.75em",
-                            color="#6b7280", font_style="italic"),
-                    spacing="1",
-                    align="center",
+                TerramonState.static_map_url != "",
+                rx.box(
+                    rx.image(
+                        src=TerramonState.static_map_url,
+                        width="100%",
+                        height="auto",
+                        border_radius="8px",
+                        border="1px solid #27272a",
+                    ),
+                    rx.cond(
+                        TerramonState.place != "",
+                        rx.text(TerramonState.place, font_size="0.65em",
+                                color="#6b7280", text_align="center", margin_top="0.3em"),
+                        rx.fragment(),
+                    ),
+                    width="100%",
                 ),
-                rx.fragment(),
+                rx.cond(
+                    TerramonState.place != "",
+                    rx.hstack(
+                        rx.text("📍", font_size="0.8em"),
+                        rx.text(TerramonState.place, font_size="0.75em",
+                                color="#6b7280", font_style="italic"),
+                        spacing="1",
+                        align="center",
+                    ),
+                    rx.fragment(),
+                ),
             ),
             # SIN 8: MINT with explanation tooltip
             rx.cond(
@@ -1064,7 +1702,19 @@ def creature_care_panel() -> rx.Component:
                             color="#e5e7eb", font_weight="bold"),
                     rx.cond(
                         TerramonState.agent_evolution > 0,
-                        rx.text("✦ Evolved", font_size="0.7em", color="#f59e0b"),
+                        rx.text("✦ Evolved", font_size="0.7em",
+                                color=rx.cond(TerramonState.evolve_animating, "#ffd700", "#f59e0b"),
+                                text_shadow=rx.cond(
+                                    TerramonState.evolve_animating,
+                                    "0 0 20px rgba(255,215,0,0.8)",
+                                    "none",
+                                ),
+                                style=rx.cond(
+                                    TerramonState.evolve_animating,
+                                    {"animation": "celebrationSparkle 0.5s ease-in-out 3"},
+                                    {},
+                                ),
+                        ),
                         rx.fragment(),
                     ),
                     spacing="2",
@@ -1186,6 +1836,21 @@ def creature_care_panel() -> rx.Component:
                     ),
                     rx.fragment(),
                 ),
+                # I10: Grazed while away notification
+                rx.cond(
+                    TerramonState.grazed_away_message != "",
+                    rx.box(
+                        rx.text(TerramonState.grazed_away_message, font_size="0.8em",
+                                color="#22c55e", font_style="italic",
+                                text_align="center"),
+                        padding="0.5em 1em",
+                        background="#1a2e1a",
+                        border_radius="12px",
+                        border="1px solid #22c55e44",
+                        width="100%",
+                    ),
+                    rx.fragment(),
+                ),
                 # Interaction buttons grid (2x2)
                 rx.grid(
                     rx.button("🍽️ Feed", on_click=TerramonState.feed_agent,
@@ -1208,6 +1873,30 @@ def creature_care_panel() -> rx.Component:
                 rx.button("✦ EVOLVE", on_click=TerramonState.evolve_agent,
                           variant="outline", size="2", width="100%",
                           color_scheme="amber"),
+                # I10: Stasis toggle button
+                rx.cond(
+                    TerramonState.stasis_active,
+                    rx.button("✨ Deactivate Stasis",
+                              on_click=TerramonState.deactivate_stasis,
+                              variant="outline", size="2", width="100%",
+                              color_scheme="blue"),
+                    rx.button("💤 Stasis (24h pause)",
+                              on_click=TerramonState.activate_stasis,
+                              variant="outline", size="2", width="100%",
+                              color_scheme="indigo"),
+                ),
+                # I12: Release button — visible when evolution_stage >= 2
+                rx.cond(
+                    TerramonState.agent_evolution >= 2,
+                    rx.button(
+                        "🕊️ Release to Wild",
+                        on_click=TerramonState.show_release,
+                        variant="outline", size="2", width="100%",
+                        color_scheme="red",
+                        _hover={"opacity": "0.8"},
+                    ),
+                    rx.fragment(),
+                ),
                 spacing="3",
                 align="center",
                 width="100%",
@@ -1414,51 +2103,157 @@ def tutorial_overlay() -> rx.Component:
 
 
 def earth_map() -> rx.Component:
-    """Real planet Earth map showing geo-anchored creatures.
+    """Global creature map with Leaflet heatmap overlay (I11).
 
-    Uses OpenStreetMap embedded with creature markers.
-    Phases 2-3: shows markers from persisted seeds with lat/lon.
+    Shows creature density as a heatmap layer over a real-world map.
+    Clicking a region loads recent creatures in that area.
+    Falls back gracefully when no global data is available.
     """
-    # Build marker list from terra (creatures with geo data)
-    marked_seeds = [
-        c for c in _MEMORY.load_all_seeds()
-        if c.lat and c.lon
-    ]
-    # Center map around average of creatures, or default to Kraków
-    if marked_seeds:
-        avg_lat = sum(s.lat for s in marked_seeds) / len(marked_seeds)
-        avg_lon = sum(s.lon for s in marked_seeds) / len(marked_seeds)
-        markers = "&".join(
-            f"marker={s.lat},{s.lon}" for s in marked_seeds[:10]
-        )
-        map_url = (
-            f"https://www.openstreetmap.org/export/embed.html"
-            f"?bbox={avg_lon-0.5},{avg_lat-0.5},{avg_lon+0.5},{avg_lat+0.5}"
-            f"&layer=mapnik&{markers}&marker={avg_lat},{avg_lon}"
-        )
-        # Show creature count on map (avoid rx.foreach on non-Var list)
-        creature_list = rx.text(
-            f"🃏 {len(marked_seeds)} creature(s) anchored on this map",
-            font_size="0.65em", color="#9ca3af", text_align="center",
-        )
-    else:
-        map_url = "https://www.openstreetmap.org/export/embed.html?bbox=-180,-90,180,90&layer=mapnik"
-        creature_list = rx.fragment()
-
     return rx.vstack(
-        rx.text("🗺️ Your Creatures on Earth", font_size="0.85em",
-                color="#e5e7eb", font_weight="bold", text_align="center"),
-        rx.html(
-            f"""<iframe
-                width="100%" height="320" style="border-radius:12px;border:0"
-                loading="lazy" allowfullscreen
-                src="{map_url}"
-            ></iframe>"""
+        rx.hstack(
+            rx.text("🗺️ Global Creature Map", font_size="0.85em",
+                    color="#e5e7eb", font_weight="bold"),
+            rx.cond(
+                TerramonState.map_loading,
+                rx.text("⟳ loading...", font_size="0.65em", color="#f59e0b"),
+                rx.button("↻ refresh", on_click=TerramonState.load_global_map,
+                          size="1", variant="ghost", color_scheme="gray",
+                          font_size="0.65em"),
+            ),
+            justify="between",
+            width="100%",
         ),
-        creature_list,
-        rx.text("Your summoned creatures appear where your thoughts were born.",
-                font_size="0.65em", color="#6b7280", font_style="italic",
-                text_align="center", max_width="320px"),
+        # Leaflet map with heatmap + markers
+        rx.html(
+            f"""<div id="terramon-global-map" style="width:100%;height:320px;border-radius:12px;border:1px solid #27272a;background:#141418;"></div>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
+<script>
+(function() {{
+    var container = document.getElementById('terramon-global-map');
+    if (!container || container._terramonInitialized) return;
+    container._terramonInitialized = true;
+
+    var map = L.map(container, {{
+        center: [20, 0],
+        zoom: 2,
+        zoomControl: true,
+        attributionControl: false,
+    }});
+
+    L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
+        maxZoom: 18,
+    }}).addTo(map);
+
+    // Heatmap data from state
+    var heatData = {TerramonState.map_heatmap_data};
+    if (heatData.length > 0) {{
+        L.heatLayer(heatData, {{
+            radius: 25,
+            blur: 15,
+            maxZoom: 10,
+            max: 1.0,
+            gradient: {{0.0: '#9ca3af', 0.3: '#22c55e', 0.6: '#f59e0b', 0.8: '#ef4444'}},
+        }}).addTo(map);
+    }}
+
+    // Creature markers
+    var markers = {TerramonState.map_marker_json};
+    markers.forEach(function(m) {{
+        var lat = m[0], lon = m[1], agent = m[2] || 'unknown', thought = m[3] || '';
+        L.circleMarker([lat, lon], {{
+            radius: 4,
+            fillColor: '#f59e0b',
+            color: '#f59e0b',
+            weight: 1,
+            opacity: 0.7,
+            fillOpacity: 0.6,
+        }}).addTo(map)
+          .bindPopup('<b>' + agent + '</b><br><i>' + thought.substring(0, 40) + '</i>');
+    }});
+
+    // Tap region -> show creatures in 5-degree grid cell
+    map.on('click', function(e) {{
+        var gridLat = Math.floor(e.latlng.lat / 5) * 5;
+        var gridLon = Math.floor(e.latlng.lng / 5) * 5;
+        var regionKey = gridLat + '_' + gridLon;
+        // Call back to Reflex state
+        try {{
+            reflex.sendEvent('select_region', {{region_key: regionKey}});
+        }} catch(ex) {{
+            console.warn('select_region failed', ex);
+        }}
+    }});
+
+    // Fix size after mount
+    setTimeout(function() {{ map.invalidateSize(); }}, 200);
+}})();
+</script>"""
+        ),
+        # Region creatures panel
+        rx.cond(
+            TerramonState.selected_region != "",
+            rx.box(
+                rx.vstack(
+                    rx.hstack(
+                        rx.text("📍 Region " + TerramonState.selected_region,
+                                font_size="0.75em", color="#f59e0b", font_weight="bold"),
+                        rx.button("✕", on_click=TerramonState.select_region(""),
+                                  size="1", variant="ghost", color_scheme="gray"),
+                        justify="between",
+                        width="100%",
+                    ),
+                    rx.cond(
+                        TerramonState.region_creatures.length() > 0,
+                        rx.foreach(
+                            TerramonState.region_creatures,
+                            lambda c: rx.hstack(
+                                rx.text("🃏", font_size="0.8em"),
+                                rx.vstack(
+                                    rx.text(c.get("agent", "unknown"),
+                                            font_size="0.7em", color="#e5e7eb",
+                                            font_weight="bold"),
+                                    rx.text(c.get("thought", ""),
+                                            font_size="0.6em", color="#9ca3af",
+                                            max_width="200px"),
+                                    spacing="0",
+                                ),
+                                spacing="2",
+                                align="center",
+                                width="100%",
+                                border_bottom="1px solid #27272a",
+                                padding="0.3em 0",
+                            ),
+                        ),
+                        rx.text("No creatures in this region yet.",
+                                font_size="0.65em", color="#6b7280",
+                                font_style="italic"),
+                    ),
+                    spacing="2",
+                    width="100%",
+                ),
+                padding="0.5em",
+                background="#141418",
+                border="1px solid #27272a",
+                border_radius="12px",
+                width="100%",
+                max_height="200px",
+                style={"overflow_y": "auto"},
+            ),
+            rx.fragment(),
+        ),
+        # Local creatures count
+        rx.hstack(
+            rx.text("🌍 " + TerramonState.global_creatures.length().to_string()
+                    + " creatures worldwide",
+                    font_size="0.65em", color="#9ca3af"),
+            rx.text("· tap map to see region",
+                    font_size="0.6em", color="#6b7280", font_style="italic"),
+            spacing="1",
+            width="100%",
+            justify="center",
+        ),
         spacing="2",
         align="center",
         width="100%",
@@ -1572,15 +2367,88 @@ def celebration_component() -> rx.Component:
     )
 
 
+def release_dialog() -> rx.Component:
+    """I12: Release confirmation dialog — shown when player clicks 'Release to Wild'.
+
+    Confirms the release action before the creature goes into the wild.
+    The creature is removed from active care but stays in terra as a memorial.
+    """
+    return rx.cond(
+        TerramonState.show_release_dialog,
+        rx.box(
+            rx.vstack(
+                rx.text("🕊️", font_size="2.5em"),
+                rx.heading("Release to Wild?", size="5", color="#e5e7eb",
+                           font_weight="bold"),
+                rx.text(
+                    f"This will release {TerramonState.agent_name} "
+                    f"(Lv.{TerramonState.level}, Stage {TerramonState.agent_evolution}) "
+                    f"into the wild. It will be visible on the global map for "
+                    f"all players to encounter.",
+                    font_size="0.75em", color="#9ca3af",
+                    text_align="center", max_width="300px",
+                ),
+                rx.text(
+                    "Your creature stays in terra as a memorial. "
+                    "You can no longer interact with it.",
+                    font_size="0.7em", color="#6b7280",
+                    text_align="center", max_width="300px",
+                    font_style="italic",
+                ),
+                rx.text(
+                    "★ Wild Tamer badge earned!",
+                    font_size="0.7em", color="#f59e0b",
+                    text_align="center", font_weight="bold",
+                ),
+                rx.hstack(
+                    rx.button(
+                        "Cancel",
+                        on_click=TerramonState.hide_release,
+                        variant="soft", size="2",
+                        color_scheme="gray", width="50%",
+                    ),
+                    rx.button(
+                        "🕊️ Release",
+                        on_click=TerramonState.confirm_release,
+                        variant="solid", size="2",
+                        color_scheme="red", width="50%",
+                    ),
+                    spacing="2",
+                    width="100%",
+                ),
+                spacing="3",
+                align="center",
+                padding="2em",
+                background="linear-gradient(145deg, #1a1a2e 0%, #141418 100%)",
+                border="1px solid #ef444444",
+                border_radius="20px",
+                max_width="340px",
+                width="100%",
+            ),
+            position="fixed",
+            top="0", left="0", right="0", bottom="0",
+            background="rgba(0,0,0,0.75)",
+            display="flex",
+            align_items="center",
+            justify_content="center",
+            z_index="950",
+            padding="1em",
+        ),
+        rx.fragment(),
+    )
+
+
 def index() -> rx.Component:
     """GameBoy-style single-screen TMA. Everything visible at once, no scrolling.
     Three zones: TOP (creature), MIDDLE (stats+input), BOTTOM (nav).
     Like Pokémon Gold — all on one iPhone screen."""
     return rx.center(
         # CSS animations injected via html style tag
-        rx.html(f"<style>{_CELEBRATION_STYLE}</style>"),
+        rx.html(f"<style>{_CELEBRATION_STYLE}{_EVOLVE_STYLE}</style>"),
         # Tutorial overlay (first visit only, on top of everything)
         tutorial_overlay(),
+        # I12: Release confirmation dialog
+        release_dialog(),
         # Outer container: fixed height = 100vh, no overflow
         rx.box(
             rx.vstack(
@@ -1602,6 +2470,40 @@ def index() -> rx.Component:
                         rx.text("Lv.", color="#9ca3af", font_size="0.7em"),
                         rx.text(TerramonState.level.to_string(), color="#f59e0b",
                                 font_weight="bold", font_size="0.85em"),
+                        # I09: Streak flame
+                        rx.cond(
+                            TerramonState.summon_streak >= 7,
+                            rx.text("🔥🔥", font_size="0.8em",
+                                    text_shadow="0 0 8px rgba(239,68,68,0.6)"),
+                            rx.cond(
+                                TerramonState.summon_streak >= 3,
+                                rx.text("🔥", font_size="0.8em",
+                                        text_shadow="0 0 6px rgba(239,68,68,0.4)"),
+                                rx.cond(
+                                    TerramonState.summon_streak > 0,
+                                    rx.text("🔥", font_size="0.7em",
+                                            color="#9ca3af"),
+                                    rx.fragment(),
+                                ),
+                            ),
+                        ),
+                        # I12: ★ Wild Tamer badge
+                        rx.cond(
+                            TerramonState.wild_tamer_badge,
+                            rx.hstack(
+                                rx.text("★", color="#22c55e", font_size="0.8em",
+                                        text_shadow="0 0 8px rgba(34,197,94,0.5)"),
+                                rx.text("Wild Tamer", color="#22c55e",
+                                        font_weight="bold", font_size="0.55em"),
+                                spacing="1",
+                                align="center",
+                                border="1px solid #22c55e44",
+                                border_radius="999px",
+                                padding="0.1em 0.4em",
+                                background="rgba(34,197,94,0.08)",
+                            ),
+                            rx.fragment(),
+                        ),
                         # I05: progression tier badge + name
                         rx.cond(
                             TerramonState.distinct > 0,
@@ -1641,63 +2543,104 @@ def index() -> rx.Component:
                     rx.cond(
                         TerramonState.has_summoned,
                         # Compact creature card
-                        rx.vstack(
-                            rx.text(TerramonState.sigil, font_size="2.8em",
-                                    color=rx.cond(TerramonState.goal_reached, "#f59e0b", TerramonState.color),
-                                    text_shadow=rx.cond(
-                                        TerramonState.goal_reached,
-                                        "0 0 40px rgba(245,158,11,0.6)",
-                                        TerramonState.rarity_glow_style,
-                                    )),
-                            rx.text(TerramonState.agent, color=rx.cond(TerramonState.goal_reached, "#f59e0b", TerramonState.color),
-                                    font_weight="bold", font_size="1em"),
-                            rx.text('"' + TerramonState.thought[:40] + '"',
-                                    font_size="0.7em", text_align="center",
-                                    max_width="260px"),
-                            # Phase 2: archetype lore on compact card
-                            rx.text(TerramonState.lore, font_size="0.65em",
-                                    color="#9ca3af", text_align="center",
-                                    max_width="260px", font_style="italic"),
-                            # F1.1: Compact speech bubble
+                        rx.box(
                             rx.cond(
-                                TerramonState.creature_greeting != "",
+                                TerramonState.evolve_animating,
                                 rx.box(
-                                    rx.text(TerramonState.creature_greeting,
-                                            font_size="0.6em", color="#d8b4fe",
-                                            font_style="italic", text_align="center"),
-                                    padding="0.3em 0.6em",
-                                    background="#1e1e2a",
-                                    border_radius="8px",
-                                    border="1px solid #27272a",
-                                    width="100%",
-                                    max_width="260px",
+                                    # Shimmer sweep overlay
+                                    rx.box(
+                                        style={
+                                            "position": "absolute",
+                                            "inset": "0",
+                                            "background": "linear-gradient(90deg, transparent 0%, rgba(245,158,11,0.15) 25%, rgba(255,255,200,0.25) 50%, rgba(245,158,11,0.15) 75%, transparent 100%)",
+                                            "background_size": "300% 100%",
+                                            "border_radius": "16px",
+                                            "pointer_events": "none",
+                                            "z_index": "5",
+                                            "animation": "evolutionShimmer 1s ease-in-out 1",
+                                        },
+                                    ),
+                                    # Emoji burst: ★★★★
+                                    rx.text(
+                                        "★★★★",
+                                        position="absolute",
+                                        top="-10px",
+                                        right="-10px",
+                                        font_size="1.4em",
+                                        color="#f59e0b",
+                                        text_shadow="0 0 20px rgba(245,158,11,0.8)",
+                                        z_index="10",
+                                        pointer_events="none",
+                                        style={"animation": "evolutionBurst 1.2s ease-out 1"},
+                                    ),
                                     position="relative",
                                 ),
                                 rx.fragment(),
                             ),
-                            # F1.2: Geo location on compact card
-                            rx.cond(
-                                TerramonState.place != "",
-                                rx.hstack(
-                                    rx.text("📍", font_size="0.6em"),
-                                    rx.text(TerramonState.place, font_size="0.55em",
-                                            color="#6b7280", font_style="italic"),
-                                    spacing="1",
-                                    align="center",
-                                ),
-                                rx.fragment(),
-                            ),
-                            # F1.3: Memory greeting (compact)
-                            rx.cond(
-                                TerramonState.memory_greeting != "",
-                                rx.text(TerramonState.memory_greeting,
-                                        font_size="0.55em", color="#a78bfa",
-                                        text_align="center", font_style="italic",
+                            rx.vstack(
+                                rx.text(TerramonState.sigil, font_size="2.8em",
+                                        color=rx.cond(TerramonState.goal_reached, "#f59e0b", TerramonState.color),
+                                        text_shadow=rx.cond(
+                                            TerramonState.goal_reached,
+                                            "0 0 40px rgba(245,158,11,0.6)",
+                                            TerramonState.rarity_glow_style,
+                                        )),
+                                rx.text(TerramonState.agent, color=rx.cond(TerramonState.goal_reached, "#f59e0b", TerramonState.color),
+                                        font_weight="bold", font_size="1em"),
+                                rx.text('"' + TerramonState.thought[:40] + '"',
+                                        font_size="0.7em", text_align="center",
                                         max_width="260px"),
-                                rx.fragment(),
+                                # Phase 2: archetype lore on compact card
+                                rx.text(TerramonState.lore, font_size="0.65em",
+                                        color="#9ca3af", text_align="center",
+                                        max_width="260px", font_style="italic"),
+                                # F1.1: Compact speech bubble
+                                rx.cond(
+                                    TerramonState.creature_greeting != "",
+                                    rx.box(
+                                        rx.text(TerramonState.creature_greeting,
+                                                font_size="0.6em", color="#d8b4fe",
+                                                font_style="italic", text_align="center"),
+                                        padding="0.3em 0.6em",
+                                        background="#1e1e2a",
+                                        border_radius="8px",
+                                        border="1px solid #27272a",
+                                        width="100%",
+                                        max_width="260px",
+                                        position="relative",
+                                    ),
+                                    rx.fragment(),
+                                ),
+                                # F1.2: Geo location on compact card
+                                rx.cond(
+                                    TerramonState.place != "",
+                                    rx.hstack(
+                                        rx.text("📍", font_size="0.6em"),
+                                        rx.text(TerramonState.place, font_size="0.55em",
+                                                color="#6b7280", font_style="italic"),
+                                        spacing="1",
+                                        align="center",
+                                    ),
+                                    rx.fragment(),
+                                ),
+                                # F1.3: Memory greeting (compact)
+                                rx.cond(
+                                    TerramonState.memory_greeting != "",
+                                    rx.text(TerramonState.memory_greeting,
+                                            font_size="0.55em", color="#a78bfa",
+                                            text_align="center", font_style="italic",
+                                            max_width="260px"),
+                                    rx.fragment(),
+                                ),
+                                spacing="1",
+                                align="center",
                             ),
-                            spacing="1",
-                            align="center",
+                            width="100%",
+                            style=rx.cond(
+                                TerramonState.evolve_animating,
+                                {"animation": "evolutionScale 1s ease-out 1"},
+                                {},
+                            ),
                         ),
                         # Empty state: compact shadow creature
                         rx.vstack(

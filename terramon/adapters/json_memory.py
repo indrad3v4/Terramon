@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import sqlite3
 import time
 from collections import Counter
@@ -38,6 +39,9 @@ CREATE TABLE IF NOT EXISTS seeds (
     rarity           TEXT NOT NULL DEFAULT 'common',
     price_sats       INTEGER NOT NULL DEFAULT 0,
     paid             INTEGER NOT NULL DEFAULT 0,
+    owner_id         TEXT NOT NULL DEFAULT 'player',
+    for_trade        INTEGER NOT NULL DEFAULT 0,
+    trade_price_sats INTEGER NOT NULL DEFAULT 0,
     insight_driver        TEXT,
     insight_barrier       TEXT,
     insight_therefore     TEXT,
@@ -93,6 +97,9 @@ class JsonMemory(MemoryPort):
             "rarity": seed.rarity,
             "price_sats": seed.price_sats,
             "paid": seed.paid,
+            "lat": seed.lat,
+            "lon": seed.lon,
+            "place_name": seed.place_name,
         }
         # Persist the insight (FIX 2) as a nested json_memory column when present.
         # Old seeds without an insight simply omit the key -> backward compatible.
@@ -177,6 +184,37 @@ class JsonMemory(MemoryPort):
                     record["birth_embedding"] = {int(k): v for k, v in be_data.items()}
             seeds.append(ThoughtSeed(**record))
         return seeds
+
+    # ── Proximity search (G03: Haversine-based find_nearby) ─────────────────
+
+    @staticmethod
+    def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+        """Haversine distance in km between two lat/lon points."""
+        R = 6371.0  # Earth radius in km
+        dlat = math.radians(lat2 - lat1)
+        dlon = math.radians(lon2 - lon1)
+        a = (math.sin(dlat / 2) ** 2 +
+             math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) *
+             math.sin(dlon / 2) ** 2)
+        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+        return R * c
+
+    def find_nearby(self, lat: float, lon: float, radius_km: float = 1.0) -> list[tuple[ThoughtSeed, float]]:
+        """Find all creatures within `radius_km` of (lat, lon), sorted by distance.
+
+        Returns list of (seed, distance_km) tuples, closest first.
+        Seeds without geo coordinates (lat=0, lon=0) are skipped.
+        """
+        seeds = self.load_all_seeds()
+        results: list[tuple[ThoughtSeed, float]] = []
+        for s in seeds:
+            if not s.lat and not s.lon:
+                continue  # skip seeds without real geo
+            dist = self._haversine_km(lat, lon, s.lat, s.lon)
+            if dist <= radius_km:
+                results.append((s, dist))
+        results.sort(key=lambda x: x[1])
+        return results
 
     # ── Data stats reporter (Phase 9: Pretraining / Data Versioning) ─────
 
@@ -491,12 +529,12 @@ class SqliteMemory(MemoryPort):
         self._conn.execute(
             """INSERT INTO seeds (
                 raw_input, summoned_agent, timestamp, status,
-                rarity, price_sats, paid,
+                rarity, price_sats, paid, owner_id, for_trade, trade_price_sats,
                 insight_driver, insight_barrier, insight_therefore,
                 insight_archetype, insight_nuance, insight_confidence,
                 insight_geo_lat, insight_geo_lon, insight_geo_place_name,
                 insight_embedding, lat, lon, place_name
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             self._seed_to_row(seed),
         )
         self._conn.commit()
@@ -534,6 +572,9 @@ class SqliteMemory(MemoryPort):
             seed.rarity,
             seed.price_sats,
             1 if seed.paid else 0,
+            seed.owner_id if hasattr(seed, 'owner_id') else 'player',
+            1 if getattr(seed, 'for_trade', False) else 0,
+            getattr(seed, 'trade_price_sats', 0),
             insight_driver,
             insight_barrier,
             insight_therefore,
@@ -573,6 +614,43 @@ class SqliteMemory(MemoryPort):
         """Return total number of stored seeds (zero-overhead)."""
         row = self._conn.execute("SELECT COUNT(*) AS cnt FROM seeds").fetchone()
         return row["cnt"] if row else 0
+
+    # ── Proximity search (G03: Haversine-based find_nearby) ─────────────────
+
+    def find_nearby(self, lat: float, lon: float, radius_km: float = 1.0) -> list[tuple[ThoughtSeed, float]]:
+        """Find all creatures within `radius_km` using SQL-level Haversine.
+
+        Returns list of (seed, distance_km) tuples, closest first.
+        Seeds without geo coordinates (lat=0, lon=0) are skipped.
+        """
+        # Haversine formula in SQL: compute distance for each row, filter, sort.
+        query = """
+            SELECT *, (
+                6371.0 * 2 * ASIN(SQRT(
+                    POWER(SIN(RADIANS(lat - ?) / 2), 2) +
+                    COS(RADIANS(?)) * COS(RADIANS(lat)) *
+                    POWER(SIN(RADIANS(lon - ?) / 2), 2)
+                ))
+            ) AS dist_km
+            FROM seeds
+            WHERE lat != 0 AND lon != 0
+              AND (
+                6371.0 * 2 * ASIN(SQRT(
+                    POWER(SIN(RADIANS(lat - ?) / 2), 2) +
+                    COS(RADIANS(?)) * COS(RADIANS(lat)) *
+                    POWER(SIN(RADIANS(lon - ?) / 2), 2)
+                ))
+              ) <= ?
+            ORDER BY dist_km ASC
+        """
+        params = (lat, lat, lon, lat, lat, lon, radius_km)
+        rows = self._conn.execute(query, params).fetchall()
+        results = []
+        for row in rows:
+            seed = _row_to_seed(row)
+            dist = float(row["dist_km"])
+            results.append((seed, dist))
+        return results
 
     # ── Bond persistence ──────────────────────────────────────────────
 
@@ -715,6 +793,67 @@ class SqliteMemory(MemoryPort):
             "oldest_seed": oldest,
             "newest_seed": newest,
         }
+
+    # ── P3 M04: Creature trading ──────────────────────────────────────
+
+    def list_for_trade(self, seed_id: int, price_sats: int) -> bool:
+        """Mark a creature as available for trade at the given price.
+
+        Returns True if the seed was found and updated, False otherwise.
+        """
+        cursor = self._conn.execute(
+            "UPDATE seeds SET for_trade = 1, trade_price_sats = ? WHERE id = ?",
+            (price_sats, seed_id),
+        )
+        self._conn.commit()
+        return cursor.rowcount > 0
+
+    def cancel_trade(self, seed_id: int) -> bool:
+        """Remove a creature from the trade listings."""
+        cursor = self._conn.execute(
+            "UPDATE seeds SET for_trade = 0, trade_price_sats = 0 WHERE id = ?",
+            (seed_id,),
+        )
+        self._conn.commit()
+        return cursor.rowcount > 0
+
+    def get_trade_listings(self) -> list[dict]:
+        """Return all seeds currently listed for trade.
+
+        Each entry is a dict with seed info plus the trade_price_sats.
+        """
+        rows = self._conn.execute(
+            "SELECT * FROM seeds WHERE for_trade = 1 ORDER BY trade_price_sats ASC"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def transfer_ownership(self, seed_id: int, new_owner: str) -> bool:
+        """Transfer a creature to a new owner.
+
+        Resets for_trade flags and updates owner_id.
+        Returns True on success.
+        """
+        cursor = self._conn.execute(
+            "UPDATE seeds SET owner_id = ?, for_trade = 0, trade_price_sats = 0 WHERE id = ?",
+            (new_owner, seed_id),
+        )
+        self._conn.commit()
+        return cursor.rowcount > 0
+
+    def execute_trade(self, seed_id: int, seller: str, buyer: str, price_sats: int) -> bool:
+        """Execute a full trade: transfer ownership and mark as traded.
+
+        Validates the creature is still listed for trade by the seller
+        at the expected price before executing.
+        Returns True on success.
+        """
+        row = self._conn.execute(
+            "SELECT * FROM seeds WHERE id = ? AND for_trade = 1 AND owner_id = ? AND trade_price_sats = ?",
+            (seed_id, seller, price_sats),
+        ).fetchone()
+        if row is None:
+            return False
+        return self.transfer_ownership(seed_id, buyer)
 
 
 # ======================================================================

@@ -26,6 +26,7 @@ class Rarity(str, Enum):
     UNCOMMON = "uncommon"
     RARE = "rare"
     LEGENDARY = "legendary"
+    FUSION = "fusion"
 
 
 # Price per rarity tier in "Stars" (Telegram Stars equivalent).
@@ -39,6 +40,7 @@ RARITY_PRICE = {
     Rarity.UNCOMMON: 0,
     Rarity.RARE: 15,
     Rarity.LEGENDARY: 25,
+    Rarity.FUSION: 0,
 }
 RARITY_PRICE_SATS = RARITY_PRICE  # alias for backward compat
 
@@ -155,17 +157,25 @@ def _dirichlet_sample(alphas: list[float], seed_hash: str) -> int:
     return len(probs) - 1
 
 
-def classify_rarity(thought_seed: str) -> RarityResult:
+def classify_rarity(thought_seed: str, rare_boost: float = 0.0) -> RarityResult:
     """Map a thought to a probabilistic rarity tier via Dirichlet distribution.
 
     The same text always summons the same rarity (deterministic sampling).
     Different texts with similar content sample from the same distribution,
     giving graded probability rather than binary matches.
 
+    Args:
+        thought_seed: The thought text to classify.
+        rare_boost: Additional probability mass shifted to the rare tier
+            (e.g. 0.05 for +5%). Implemented by boosting the rare logit.
+
     Returns RarityResult with the sampled tier AND the full probability
     vector (for frontend display: "Rarity odds").
     """
     logits = _rarity_logits(thought_seed)
+
+    # I09: Apply rare probability boost (shift mass toward rare tier)
+    logits[2] += rare_boost * 5.0  # Scale: logit-space boost ~5x the probability boost
 
     # Add logits (in log space) to log of Dirichlet prior alphas
     # log(alpha_i) = log(prior_i) + logit_i  (evidence shifts the prior)
