@@ -1,13 +1,40 @@
-.venv/
-.web/
+# ── Python ──
 __pycache__/
 *.pyc
-.states/
+*.pyo
+*.egg-info/
+*.egg
+dist/
+build/
+*.whl
+.venv/
+venv/
+
+# ── Node / Reflex ──
+node_modules/
+.web/
+frontend.zip
 reflex.lock/
-.git/
-data/*.png
+
+# ── Data persistence (local — Railway uses volume mounts) ──
+data/*.jsonl
+!data/.gitkeep
+
+# ── IDE ──
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── OS ──
+.DS_Store
+Thumbs.db
+
+# ── Secrets ──
 .env
-*.db
-tests/
-docs/
-*.md
+.env.local
+
+# ── Git ──
+.git/
+.gitignore

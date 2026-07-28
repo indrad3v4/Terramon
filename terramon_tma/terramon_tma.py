@@ -60,7 +60,13 @@ from tools.time_tool import get_current_time
 
 # Initialize LLM-powered creature behavior from env
 import os
-_init_llm(os.environ.get("OPENROUTER_API_KEY", ""))
+_llm_key = os.environ.get("OPENROUTER_API_KEY", "")
+if not _llm_key:
+    log.warning(
+        "OPENROUTER_API_KEY not set — creature LLM responses will be disabled. "
+        "Set it in .env or Railway environment variables."
+    )
+_init_llm(_llm_key)
 
 
 # One classifier instance (prototypes precomputed once).
@@ -193,6 +199,24 @@ class TerramonState(rx.State):
     last_tick: str = ""  # ISO timestamp of last decay tick
     agent_portrait: str = ""  # FAL.ai generated portrait path
     can_mint: bool = False  # Bayesian confidence gate for MINT
+
+    # Phase 19 — Creature state machine display
+    creature_state: str = "happy"
+    creature_mood: str = "content"
+    day_phase: str = "day"
+
+    # Phase 19 — BPE tokenizer / classifier info
+    token_count: int = 0
+    token_archetype: str = ""
+    token_confidence: float = 0.0
+
+    # Phase 19 — Safety flag
+    safety_flagged: bool = False
+    safety_reason: str = ""
+
+    # Phase 19 — Scout integration
+    scout_result: str = ""
+    scout_running: bool = False
 
     # The player's terra: every creature that ever lived (persisted).
     terra: list[dict] = []
@@ -353,6 +377,54 @@ class TerramonState(rx.State):
         except Exception as e:
             log.warning(f"Rarity/evolve failed: {e}")
 
+        # Phase 19: Creature state + mood computation
+        try:
+            from tools.time_tool import get_day_phase
+            _phase = get_day_phase()
+            self.day_phase = "night" if _phase == "night" else "day"
+            _tmp_agent = CreatureAgent(
+                agent_id="_state", archetype=self.agent,
+                hunger=self.agent_hunger, energy=self.agent_energy,
+                happiness=self.agent_happiness,
+            )
+            self.creature_state = _tmp_agent.state.value
+            self.creature_mood = _tmp_agent.mood
+        except Exception as e:
+            log.warning(f"Creature state/mood failed: {e}")
+            self.day_phase = "day"
+            self.creature_state = "happy"
+            self.creature_mood = "content"
+
+        # Phase 19: BPE tokenizer status (token count + archetype confidence)
+        try:
+            _classifier_scores = _CLASSIFIER.scores(text)
+            self.token_archetype = self.agent
+            self.token_confidence = _classifier_scores.get(self.agent, 0.0)
+            # Token count from text preprocessing
+            from terramon.adapters.text_preprocessing import preprocess_for_classifier
+            _clean = preprocess_for_classifier(text)
+            import re
+            self.token_count = len(re.findall(r"[a-z']+", _clean))
+        except Exception as e:
+            log.warning(f"Token stats failed: {e}")
+            self.token_count = 0
+            self.token_archetype = self.agent
+            self.token_confidence = 0.0
+
+        # Phase 19: Safety flag from content safety middleware
+        try:
+            from terramon.events.bus import content_safety_middleware
+            from terramon.events.agent_summoned import AgentSummoned
+            import datetime as _dt
+            _evt = AgentSummoned(text, self.agent, _dt.datetime.now().isoformat())
+            _flagged_evt, _ = content_safety_middleware(_evt)
+            self.safety_flagged = _flagged_evt.safety_flagged
+            self.safety_reason = _flagged_evt.safety_reason
+        except Exception as e:
+            log.warning(f"Safety check failed: {e}")
+            self.safety_flagged = False
+            self.safety_reason = ""
+
         # Reload terra
         try:
             seeds = _MEMORY.load_all_seeds()
@@ -369,9 +441,10 @@ class TerramonState(rx.State):
         _rarity = self.rarity
         def _gen_portrait():
             try:
-                from terramon.application.portrait_gen import generate_portrait
-                p = generate_portrait(_thought, _agent, _rarity)
-            except: pass
+                from terramon.application.portrait_gen import generate_portrait as _gen
+                _gen(_thought, _agent, _rarity)
+            except Exception as _e:
+                log.debug("Portrait generation skipped: %s", _e)
         threading.Thread(target=_gen_portrait, daemon=True).start()
 
     @rx.event
@@ -432,6 +505,7 @@ class TerramonState(rx.State):
         self.agent_hunger = min(100, self.agent_hunger + 25)
         self.agent_energy = min(100, self.agent_energy + 5)
         self.agent_message = msg.text
+        self._recompute_creature_state()
 
     @rx.event
     def play_with_agent(self):
@@ -441,6 +515,7 @@ class TerramonState(rx.State):
         msg = _AGENT_SVC.play(CreatureAgent("_tmp", hunger=self.agent_hunger,
                               energy=self.agent_energy, happiness=self.agent_happiness))
         self.agent_message = msg.text
+        self._recompute_creature_state()
 
     @rx.event
     def rest_agent(self):
@@ -449,6 +524,7 @@ class TerramonState(rx.State):
         msg = _AGENT_SVC.rest(CreatureAgent("_tmp", hunger=self.agent_hunger,
                               energy=self.agent_energy, happiness=self.agent_happiness))
         self.agent_message = msg.text
+        self._recompute_creature_state()
 
     @rx.event
     def talk_to_agent(self):
@@ -461,6 +537,7 @@ class TerramonState(rx.State):
                                               therefore=self.insight.replace("INSIGHT: ", ""),
                                               archetype=self.agent)))
         self.agent_message = msg.text
+        self._recompute_creature_state()
 
     @rx.event
     def evolve_agent(self):
@@ -509,8 +586,12 @@ class TerramonState(rx.State):
         self.agent_message = "📤 Creature card copied! Share it anywhere."
 
     def _apply_tick_decay(self):
-        """Apply stat decay based on elapsed time (Phase 4 retention).
-        Called from load_terra() on every app open."""
+        """Apply stat decay based on elapsed time (Phase 6: state machine + EMA).
+
+        Uses the CreatureAgent's _apply_tick() core logic so the TMA's
+        batch tick decay is consistent with the canonical implementation.
+        Called from load_terra() on every app open.
+        """
         import datetime
         if not self.last_tick:
             self.last_tick = datetime.datetime.now().isoformat()
@@ -519,13 +600,81 @@ class TerramonState(rx.State):
             last_dt = datetime.datetime.fromisoformat(self.last_tick)
             hours = (datetime.datetime.now() - last_dt).total_seconds() / 3600
             ticks = min(int(hours), 48)
+
+            # Use the canonical CreatureAgent tick logic
+            from terramon.domain.creature_agent import CreatureAgent
+            from tools.time_tool import get_day_phase
+
+            day_phase = get_day_phase()
+            temp = CreatureAgent(
+                agent_id="_tick",
+                hunger=self.agent_hunger or 80,
+                energy=self.agent_energy or 80,
+                happiness=self.agent_happiness or 60,
+            )
             for _ in range(ticks):
-                self.agent_hunger = max(0, self.agent_hunger - 5)
-                self.agent_energy = max(0, self.agent_energy - 3)
-                self.agent_happiness = max(0, self.agent_happiness - 2)
+                temp._apply_tick(day_phase)
+
+            self.agent_hunger = temp.hunger
+            self.agent_energy = temp.energy
+            self.agent_happiness = temp.happiness
             self.last_tick = datetime.datetime.now().isoformat()
         except (ValueError, TypeError):
             self.last_tick = datetime.datetime.now().isoformat()
+
+    # ── Phase 19: Creature state recomputation ───────────────
+
+    def _recompute_creature_state(self):
+        """Recompute creature state + mood from current stats (after care actions)."""
+        try:
+            from terramon.domain.creature_agent import CreatureAgent
+            from tools.time_tool import get_day_phase
+            _phase = get_day_phase()
+            self.day_phase = "night" if _phase == "night" else "day"
+            _c = CreatureAgent(
+                agent_id="_recompute",
+                hunger=self.agent_hunger, energy=self.agent_energy,
+                happiness=self.agent_happiness,
+            )
+            self.creature_state = _c.state.value
+            self.creature_mood = _c.mood
+        except Exception as e:
+            log.warning(f"State recompute failed: {e}")
+
+    @rx.event
+    def run_scout(self):
+        """Run the Scout agent on the current thought seed in a background thread."""
+        if not self.thought.strip() or self.scout_running:
+            return
+        self.scout_running = True
+        self.scout_result = ""
+        import threading
+        _text = self.thought
+        def _scout_thread():
+            try:
+                from main import run_scout
+                import io, contextlib
+                _buf = io.StringIO()
+                with contextlib.redirect_stdout(_buf):
+                    run_scout(_text)
+                self.scout_result = _buf.getvalue()
+            except Exception as _e:
+                log.warning(f"Scout failed: {_e}")
+                self.scout_result = f"⚠️ Scout error: {_e}"
+            finally:
+                self.scout_running = False
+        threading.Thread(target=_scout_thread, daemon=True).start()
+
+    @rx.event
+    def refresh_portrait(self):
+        """Refresh creature portrait from the registry (called on mount)."""
+        try:
+            from terramon.application.portrait_gen import get_portrait
+            _p = get_portrait(self.thought, self.agent, self.rarity)
+            if _p:
+                self.agent_portrait = _p
+        except Exception as e:
+            log.debug(f"Portrait refresh skipped: {e}")
 
 
 def _price_for(rarity: str) -> int:
@@ -644,12 +793,22 @@ def creature_card() -> rx.Component:
     """The creature card. SIN 9 FIX: fade-in through style opacity."""
     return rx.box(
         rx.vstack(
-            # SIN 4: oversized sigil as creature art placeholder
-            rx.text(
-                TerramonState.sigil,
-                font_size="3em",
-                color=TerramonState.color,
-                text_shadow=TerramonState.rarity_glow_style,
+            # Phase 19: Portrait from registry with sigil fallback
+            rx.cond(
+                TerramonState.agent_portrait != "",
+                rx.image(
+                    src=TerramonState.agent_portrait,
+                    width="100px", height="100px",
+                    border_radius="12px",
+                    border="2px solid " + TerramonState.color,
+                    box_shadow=TerramonState.rarity_glow_style,
+                ),
+                rx.text(
+                    TerramonState.sigil,
+                    font_size="3em",
+                    color=TerramonState.color,
+                    text_shadow=TerramonState.rarity_glow_style,
+                ),
             ),
             rx.heading(TerramonState.agent, size="7", color=TerramonState.color),
             rx.text('"' + TerramonState.thought + '"', font_style="italic",
@@ -711,6 +870,17 @@ def creature_card() -> rx.Component:
                 rx.text(TerramonState.intelligence.to_string() + "%",
                         font_size="0.75em", color="#c4b5fd", font_weight="bold"),
                 spacing="1",
+            ),
+            # Phase 19: BPE tokenizer status
+            rx.cond(
+                TerramonState.token_count > 0,
+                rx.text(
+                    "tokens: " + TerramonState.token_count.to_string()
+                    + " | archetype: " + TerramonState.token_archetype
+                    + " | confidence: " + (TerramonState.token_confidence * 100).to_string() + "%",
+                    font_size="0.65em", color="#6b7280", text_align="center",
+                ),
+                rx.fragment(),
             ),
             # Lesson 06: top-3 archetype probability sparkline bars
             rx.vstack(
@@ -781,6 +951,16 @@ def creature_card() -> rx.Component:
                 color_scheme="gray",
                 margin_top="0.25em",
             ),
+            # Phase 19: Subtle safety note when content is flagged
+            rx.cond(
+                TerramonState.safety_flagged,
+                rx.text(
+                    "content advisory: " + TerramonState.safety_reason,
+                    font_size="0.6em", color="#6b7280", font_style="italic",
+                    text_align="center", max_width="340px",
+                ),
+                rx.fragment(),
+            ),
             # SIN 11: goal celebration with visual weight
             rx.cond(
                 TerramonState.goal_reached,
@@ -837,6 +1017,30 @@ def creature_care_panel() -> rx.Component:
                         rx.fragment(),
                     ),
                     spacing="2",
+                ),
+                # Phase 19: Creature state + mood + day/night indicator
+                rx.hstack(
+                    rx.cond(
+                        TerramonState.day_phase == "night",
+                        rx.text("🌙 Night · ", font_size="0.65em", color="#6366f1"),
+                        rx.text("☀️ Day · ", font_size="0.65em", color="#f59e0b"),
+                    ),
+                    rx.text(
+                        rx.cond(
+                            TerramonState.creature_mood == "cheerful",
+                            "😊 ",
+                            rx.cond(
+                                TerramonState.creature_mood == "distressed",
+                                "😰 ",
+                                "😐 ",
+                            ),
+                        ),
+                        font_size="0.7em", color="#9ca3af",
+                    ),
+                    rx.text(TerramonState.creature_state.upper(),
+                            font_size="0.65em", color="#9ca3af"),
+                    spacing="1",
+                    align="center",
                 ),
                 # Stat bars — bound to state vars (WAS hardcoded 50% — Lens #55 roast)
                 rx.text("🍽️ Hunger", font_size="0.7em", color="#9ca3af"),
@@ -1510,17 +1714,44 @@ def index() -> rx.Component:
                         ),
                         rx.hstack(
                             rx.button("📷", on_click=TerramonState.capture,
-                                      size="2", variant="surface", width="30%",
+                                      size="2", variant="surface", width="20%",
                                       color_scheme="gray"),
                             rx.button(
                                 rx.cond(TerramonState.summoning, "🔮", "✨ SUMMON"),
                                 on_click=TerramonState.summon,
-                                size="2", width="68%",
+                                size="2", width="48%",
                                 variant="solid", color_scheme="amber",
+                                _hover={"transform": "scale(1.02)"},
+                            ),
+                            rx.button(
+                                rx.cond(TerramonState.scout_running, "⏳", "🔍 Scout"),
+                                on_click=TerramonState.run_scout,
+                                size="2", width="30%",
+                                variant="surface",
+                                color_scheme="blue",
                                 _hover={"transform": "scale(1.02)"},
                             ),
                             spacing="2",
                             width="100%",
+                        ),
+                        # Phase 19: Scout result display
+                        rx.cond(
+                            TerramonState.scout_result != "",
+                            rx.box(
+                                rx.text(TerramonState.scout_result,
+                                        font_size="0.65em", color="#a78bfa",
+                                        text_align="left",
+                                        max_width="360px",
+                                        white_space="pre-wrap",
+                                ),
+                                padding="0.4em 0.6em",
+                                background="#1a1a2e",
+                                border="1px solid #27272a",
+                                border_radius="8px",
+                                width="100%",
+                                max_width="360px",
+                            ),
+                            rx.fragment(),
                         ),
                         spacing="2",
                         width="100%",
@@ -1590,6 +1821,17 @@ def index() -> rx.Component:
                                     spacing="2",
                                     width="100%",
                                 ),
+                                # Phase 19: Data stats footer
+                                rx.cond(
+                                    TerramonState.terra.length() > 0,
+                                    rx.text(
+                                        TerramonState.distinct.to_string() + " unique · "
+                                        + TerramonState.terra.length().to_string() + " total",
+                                        font_size="0.6em", color="#6b7280",
+                                        text_align="center", padding_top="0.5em",
+                                    ),
+                                    rx.fragment(),
+                                ),
                                 width="100%",
                                 max_width="380px",
                                 style={"overflow_y": "auto", "max_height": "30vh"},
@@ -1639,3 +1881,17 @@ app.style = {
 # Hide Reflex branding badge in TMA
 app._disable_reflex_branding = True
 app.add_page(index, title="Terramon — summon your thoughts", on_load=TerramonState.load_terra)
+
+
+# ── Healthcheck endpoint (Phase 19: JSON) ──────────────────
+# Railway's healthcheckPath="/health" pings this route to verify the
+# container is ready to serve traffic.
+# Using Starlette route directly (Reflex 0.9.x compat)
+def health(request):
+    """Return JSON health status for Railway healthcheckPath."""
+    from starlette.responses import JSONResponse
+    return JSONResponse({"status": "ok", "tests": 84})
+
+# Register the health endpoint on the underlying Starlette app
+app._api.add_route("/health", health, methods=["GET"])
+

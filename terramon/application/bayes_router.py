@@ -20,12 +20,12 @@ Player insight (indradev_):
 
 from __future__ import annotations
 
-import math
 from pathlib import Path
 from typing import Optional
 
 from terramon.adapters.embedding_classifier import EmbeddingClassifier
 from terramon.application.insight_engine import encode
+from terramon.application.math_utils import softmax, logsumexp, entropy
 
 # Jungian archetype names (must match EmbeddingClassifier)
 _ARCHETYPE_NAMES = [
@@ -134,12 +134,11 @@ def bayes_forward(thought: str,
     # Posterior = prior × likelihood (element-wise), then normalize
     posterior_raw = [p * l for p, l in zip(prior, likelihood)]
 
-    # Softmax with temperature
-    scaled = [s / temperature for s in posterior_raw]
-    m = max(scaled)
-    exps = [math.exp(s - m) for s in scaled]
-    total = sum(exps)
-    posterior = [e / total for e in exps]
+    # Softmax with temperature (stable via log-sum-exp)
+    posterior = softmax(posterior_raw, temperature=temperature)
+
+    # Confidence entropy — measure of classifier certainty
+    confidence_entropy = entropy(posterior)
 
     winner = max(range(_N_ARCHETYPES), key=lambda i: posterior[i])
     return winner, posterior, likelihood

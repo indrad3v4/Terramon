@@ -1,0 +1,27 @@
+[run]
+source = terramon
+omit =
+    .web/*
+    .venv/*
+    tests/*
+    */tests/*
+
+[report]
+# Show lines that were not executed
+show_missing = True
+
+# Fail CI if coverage drops below 70%
+fail_under = 70
+
+# Skip covered files from report
+skip_covered = False
+
+# Exclude standard test/empty patterns
+exclude_lines =
+    pragma: no cover
+    def __repr__
+    if __name__ == .__main__.:
+    raise AssertionError
+    raise NotImplementedError
+    if TYPE_CHECKING:
+    ...

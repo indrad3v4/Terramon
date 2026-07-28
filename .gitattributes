@@ -1,0 +1,21 @@
+# Auto-detect text files with LF normalization
+* text=auto eol=lf
+
+# Python
+*.py text diff=python
+*.pyi text diff=python
+*.pyw text
+
+# JSON/JSONL — keep as-is (binary-safe, no BOM)
+*.json text eol=lf
+*.jsonl text eol=lf
+
+# YAML
+*.yml text eol=lf
+*.yaml text eol=lf
+
+# Markdown
+*.md text diff=markdown
+
+# Shell scripts
+*.sh text eol=lf

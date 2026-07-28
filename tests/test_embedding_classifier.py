@@ -8,6 +8,8 @@ a play session must reach the goal.
 import math
 from pathlib import Path
 
+import pytest
+
 from terramon.adapters.embedding_classifier import (
     EmbeddingClassifier,
     _cosine,
@@ -74,6 +76,110 @@ def test_scores_returns_all_archetypes():
 
 
 # --- Integration: play session reaches the goal now that agents vary ---
+# ---------------------------------------------------------------------------
+# Phase 2: Classification metrics — precision, recall, F1
+# ---------------------------------------------------------------------------
+
+
+def _precision(tp: int, fp: int) -> float:
+    """Precision = TP / (TP + FP). Measures how many positive predictions were correct.
+
+    Returns 0.0 when denominator is zero (no positive predictions made).
+    """
+    if tp + fp == 0:
+        return 0.0
+    return tp / (tp + fp)
+
+
+def _recall(tp: int, fn: int) -> float:
+    """Recall = TP / (TP + FN). Measures how many actual positives were found.
+
+    Returns 0.0 when denominator is zero (no actual positives in the data).
+    """
+    if tp + fn == 0:
+        return 0.0
+    return tp / (tp + fn)
+
+
+def _f1(tp: int, fp: int, fn: int) -> float:
+    """F1 score = 2 * P * R / (P + R). Harmonic mean of precision and recall.
+
+    Returns 0.0 when both precision and recall are 0 (no correct predictions).
+    """
+    p = _precision(tp, fp)
+    r = _recall(tp, fn)
+    if p + r == 0.0:
+        return 0.0
+    return 2.0 * p * r / (p + r)
+
+
+def test_classification_metrics_basic() -> None:
+    """Sanity check: perfect classification gives 1.0 for all metrics."""
+    assert _precision(10, 0) == 1.0
+    assert _precision(0, 5) == 0.0
+    assert _precision(5, 5) == 0.5
+
+    assert _recall(10, 0) == 1.0
+    assert _recall(0, 5) == 0.0
+    assert _recall(5, 5) == 0.5
+
+    assert _f1(10, 0, 0) == 1.0
+    assert _f1(10, 0, 5) == pytest.approx(0.8, abs=1e-4)
+    assert _f1(5, 5, 5) == pytest.approx(0.5, abs=1e-4)
+    assert _f1(0, 0, 5) == 0.0
+
+
+def test_classification_metrics_on_classifier() -> None:
+    """Evaluate the EmbeddingClassifier using precision/recall/F1 on known cases.
+
+    Uses the training examples themselves as test cases — a basic sanity
+    check that the classifier can at least recognize its own training data.
+    """
+    clf = EmbeddingClassifier()
+
+    # Build ground truth: each example phrase belongs to its archetype
+    y_true: list[str] = []
+    y_pred: list[str] = []
+    for archetype, examples in clf.ARCHETYPES.items():
+        for ex in examples:
+            y_true.append(archetype)
+            y_pred.append(clf.classify(ex))
+
+    # Per-archetype metrics
+    archetypes = list(clf.ARCHETYPES.keys())
+    for atype in archetypes:
+        tp = sum(1 for t, p in zip(y_true, y_pred) if t == atype and p == atype)
+        fp = sum(1 for t, p in zip(y_true, y_pred) if t != atype and p == atype)
+        fn = sum(1 for t, p in zip(y_true, y_pred) if t == atype and p != atype)
+        # Each archetype has 5 training examples — at least 3 should be correct
+        # (60% recall floor on training data, allowing for cross-archetype overlap)
+        assert tp >= 3, (
+            f"{atype}: only {tp}/{tp + fn} correct (recall={_recall(tp, fn):.2f})"
+        )
+
+    # Macro-average F1 across all archetypes
+    macro_prec = sum(
+        _precision(
+            sum(1 for t, p in zip(y_true, y_pred) if t == a and p == a),
+            sum(1 for t, p in zip(y_true, y_pred) if t != a and p == a),
+        )
+        for a in archetypes
+    ) / len(archetypes)
+
+    macro_rec = sum(
+        _recall(
+            sum(1 for t, p in zip(y_true, y_pred) if t == a and p == a),
+            sum(1 for t, p in zip(y_true, y_pred) if t == a and p != a),
+        )
+        for a in archetypes
+    ) / len(archetypes)
+
+    macro_f1 = 2 * macro_prec * macro_rec / (macro_prec + macro_rec) if macro_prec + macro_rec > 0 else 0.0
+
+    # On training data, macro F1 should be at least 0.7
+    assert macro_f1 >= 0.7, f"Macro F1 on training data too low: {macro_f1:.3f}"
+
+
 def test_play_session_reaches_goal(tmp_path):
     svc = SummonService(
         classifier=EmbeddingClassifier(),

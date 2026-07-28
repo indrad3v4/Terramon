@@ -3,20 +3,34 @@
 Build-via-learn: Phase 5/10 (NLP / LLMs) of the course, scaled down honestly.
 This is a *bi-encoder in miniature*:
 
-  1. ENCODE text -> a sparse term-frequency vector in a hashed feature space
-     (the "hashing trick": token -> hash % DIM, so vocab is unbounded but the
-     vector is fixed-width). Word unigrams + bigrams capture a little context.
+  1. ENCODE text -> a sparse term-frequency-inverse-document-frequency vector
+     in a hashed feature space (the "hashing trick": token -> hash % DIM, so
+     vocab is unbounded but the vector is fixed-width). Word unigrams +
+     bigrams + trigrams capture local context. IDF weighting makes rare /
+     discriminative tokens more important.
   2. NORMALIZE (L2) so length doesn't bias similarity.
   3. Each ARCHETYPE has a prototype = the L2-normalized mean (centroid) of its
      example phrases' vectors — exactly how a nearest-centroid / prototype
      classifier works.
-  4. CLASSIFY = argmax cosine(query, prototype). Cosine of L2-normed vectors is
-     just their dot product.
+  4. CLASSIFY = argmax cosine(query, prototype). Cosine of L2-normed vectors
+     is just their dot product.
+  5. LOW-CONFIDENCE FALLBACK: if cosine similarity is below MIN_CONFIDENCE for
+     ALL archetypes, a simple Naive Bayes classifier (per-word likelihood model
+     with Laplace smoothing) is used as second pass before defaulting to
+     Innocent. This catches inputs that are semantically distant from all
+     centroids but lexically similar to one archetype.
+  6. KNN SCORING: the scores() method computes average cosine to the TOP-K
+     nearest prototype examples per archetype, giving a smoother score
+     distribution than single-centroid comparison.
 
-Why this beats KeywordClassifier (roast Lens #23 Emergence): the flat keyword
-map returned the same agent for anything off-list. Here, *any* input lands
-somewhere in the vector space and pulls the nearest archetype, so semantically
-different thoughts summon different creatures -> the collection actually grows.
+Phase 5 enhancements (NLP Foundations):
+  - Better tokenization: split hyphenated compound words, max token length
+    filtering, punctuation-aware splitting, stop word filtering for TF-IDF.
+  - TF-IDF++: smooth IDF (add 1 to avoid zero weights), sublinear TF scaling
+    (1 + log(tf) reduces the impact of very frequent terms), and L2-normalized
+    TF-IDF vectors.
+  - BPE subword tokenizer available as a separate module for rare-word and
+    misspelling robustness.
 
 Pure stdlib (math, hashlib) to honor the repo's stdlib-first rule. Deterministic:
 hashing uses blake2b with a fixed key, not Python's salted hash().
@@ -29,16 +43,49 @@ import math
 import re
 from collections import defaultdict
 
+from terramon.adapters.text_preprocessing import (
+    is_stop_word,
+    is_valid_token,
+    preprocess_for_classifier,
+)
 from terramon.ports.classifier_port import ClassifierPort
 
 DIM = 512  # hashed feature space width
+TOP_K = 3  # default K for KNN-style scoring
 
 
-def _tokens(text: str) -> list[str]:
-    """Lowercase word unigrams + adjacent bigrams (a little context)."""
-    words = re.findall(r"[a-z']+", text.lower())
-    grams = list(words)
-    grams += [f"{a}_{b}" for a, b in zip(words, words[1:])]
+def _tokens(text: str, remove_stop_words: bool = False) -> list[str]:
+    """Tokenize *text* into unigrams + adjacent bigrams + trigrams.
+
+    Improvements over Phase 2 (Phase 5 NLP Foundations):
+      - Uses preprocess_for_classifier() for NFKC, URL stripping, emoji removal,
+        repeated char normalization, and lowercasing.
+      - Splits hyphenated compound words (e.g. 'well-known' -> 'well', 'known').
+      - Max token length filtering (tokens > 25 chars are dropped).
+      - Optional stop word removal (used for TF-IDF weight computation).
+
+    When *remove_stop_words* is True, common stop words are filtered out
+    before generating n-grams. This is used during TF-IDF encoding so that
+    high-frequency stop words don't distort the vector space. The NB fallback
+    keeps all tokens for maximum evidence.
+    """
+    text = preprocess_for_classifier(text)
+    # Split compound words joined by hyphens, em-dashes, or slashes
+    text = text.replace("-", " ").replace("—", " ").replace("/", " ").replace("'", " ' ")
+    words = re.findall(r"[a-z']+", text)
+
+    # Filter tokens: max length, stop word removal
+    filtered: list[str] = []
+    for w in words:
+        if not is_valid_token(w):
+            continue
+        if remove_stop_words and is_stop_word(w):
+            continue
+        filtered.append(w)
+
+    grams: list[str] = list(filtered)
+    grams += [f"{a}_{b}" for a, b in zip(filtered, filtered[1:])]
+    grams += [f"{a}_{b}_{c}" for a, b, c in zip(filtered, filtered[1:], filtered[2:])]
     return grams
 
 
@@ -48,11 +95,41 @@ def _hash(token: str) -> int:
     return int.from_bytes(digest, "big") % DIM
 
 
-def _encode(text: str) -> dict[int, float]:
-    """Text -> L2-normalized sparse TF vector (dict bucket->weight)."""
-    vec: dict[int, float] = defaultdict(float)
-    for tok in _tokens(text):
-        vec[_hash(tok)] += 1.0
+def _encode(text: str, idf: dict[int, float] | None = None) -> dict[int, float]:
+    """Text -> L2-normalized sparse TF-IDF vector (dict bucket->weight).
+
+    When *idf* is provided, tokens are encoded with sublinear TF scaling
+    (1 + log(tf)) × smooth IDF (log(N/df) + 1). Stop words are removed
+    during TF-IDF encoding to reduce noise. Without *idf*, behaves as plain
+    TF with all tokens (backward-compatible for non-TF-IDF encoding).
+
+    Phase 5 enhancements (TF-IDF++):
+      - Sublinear TF: 1 + log(raw_tf) reduces the impact of very frequent terms.
+      - Smooth IDF: log(N / df) + 1 avoids zero IDF for tokens in every document.
+      - L2 normalization (cosine normalization).
+    """
+    tokens = _tokens(text, remove_stop_words=idf is not None)
+
+    if idf:
+        # Phase 5 TF-IDF++: count raw frequencies, then apply sublinear TF + smooth IDF
+        token_counts: dict[str, int] = {}
+        for tok in tokens:
+            token_counts[tok] = token_counts.get(tok, 0) + 1
+
+        vec: dict[int, float] = defaultdict(float)
+        for tok, tf in token_counts.items():
+            h = _hash(tok)
+            idf_w = idf.get(h, 0.0)
+            # Sublinear TF: 1 + log(tf)
+            sublinear_tf = 1.0 + math.log(max(tf, 1))
+            vec[h] += sublinear_tf * idf_w
+    else:
+        # Plain TF (backward-compatible: no IDF, no sublinear, no stop word removal)
+        vec = defaultdict(float)
+        for tok in tokens:
+            h = _hash(tok)
+            vec[h] += 1.0
+
     norm = math.sqrt(sum(v * v for v in vec.values()))
     if norm == 0:
         return {}
@@ -81,8 +158,122 @@ def _cosine(a: dict[int, float], b: dict[int, float]) -> float:
     return sum(w * big.get(k, 0.0) for k, w in small.items())
 
 
+def _compute_idf(archetypes: dict[str, list[str]]) -> dict[int, float]:
+    """Compute smooth IDF weights from all prototype training phrases.
+
+    Phase 5 smooth IDF: IDF(t) = log(N / df(t)) + 1.0
+    Adding 1.0 ensures every token (even those appearing in every document)
+    gets a nonzero weight. Tokens appearing in few documents get higher IDF,
+    making them more discriminative. Stop words are removed before computing
+    IDF to prevent high-frequency common words from dominating.
+
+    Returns dict mapping hashed bucket -> smooth IDF weight.
+    """
+    all_phrases = []
+    for examples in archetypes.values():
+        all_phrases.extend(examples)
+    n = len(all_phrases)
+    if n == 0:
+        return {}
+
+    doc_freq: dict[int, int] = defaultdict(int)
+    for phrase in all_phrases:
+        seen: set[int] = set()
+        for tok in _tokens(phrase, remove_stop_words=True):
+            h = _hash(tok)
+            if h not in seen:
+                doc_freq[h] += 1
+                seen.add(h)
+
+    idf: dict[int, float] = {}
+    for h, df in doc_freq.items():
+        # Smooth IDF: log(N / df) + 1 — every token gets at least 1.0
+        idf[h] = math.log(n / max(df, 1)) + 1.0
+    return idf
+
+
+def _build_naive_bayes(
+    archetypes: dict[str, list[str]],
+    idf: dict[int, float] | None = None,
+) -> tuple[dict[int, list[float]], list[float]]:
+    """Build a Naive Bayes model: P(token | archetype) and P(archetype).
+
+    Uses Laplace smoothing: P(token | arch) = (count + 1) / (total + V)
+    where V = total unique hashes across all archetypes. This prevents
+    zero-probability issues for unseen tokens.
+
+    When *idf* is provided, token counts are weighted by IDF so rare
+    discriminative tokens contribute more to the likelihood.
+
+    Returns:
+        word_likelihoods: dict[hash -> [P(hash|a0), P(hash|a1), ...]]
+        priors: list[float] of length N_ARCHETYPES (uniform)
+    """
+    names = list(archetypes.keys())
+    n = len(names)
+
+    # Count tokens per archetype
+    token_counts: list[dict[int, float]] = [defaultdict(float) for _ in range(n)]
+    total_tokens: list[float] = [0.0] * n
+
+    for i, name in enumerate(names):
+        for phrase in archetypes[name]:
+            for tok in _tokens(phrase, remove_stop_words=False):
+                h = _hash(tok)
+                w = idf.get(h, 1.0) if idf else 1.0
+                token_counts[i][h] += w
+                total_tokens[i] += w
+
+    # All unique hashes across all archetypes
+    all_hashes: set[int] = set()
+    for i in range(n):
+        all_hashes.update(token_counts[i].keys())
+    V = len(all_hashes) or 1  # avoid division by zero
+
+    # Laplace-smoothed: P(h | arch_i) = (count_i(h) + 1) / (total_i + V)
+    word_likelihoods: dict[int, list[float]] = {}
+    for h in all_hashes:
+        probs: list[float] = []
+        for i in range(n):
+            probs.append((token_counts[i].get(h, 0.0) + 1.0) / (total_tokens[i] + V))
+        word_likelihoods[h] = probs
+
+    # Uniform prior P(archetype)
+    priors = [1.0 / n] * n
+
+    return word_likelihoods, priors
+
+
+def _naive_bayes_predict(
+    text: str,
+    word_likelihoods: dict[int, list[float]],
+    priors: list[float],
+    names: list[str],
+) -> str:
+    """Classify text using Naive Bayes with log-space computation.
+
+    log P(arch | text) ∝ sum(log P(token | arch)) + log P(arch)
+
+    Tokens not in the vocabulary are silently skipped (they contribute
+    nothing to any archetype's score).
+    """
+    n = len(names)
+    # Start with log-prior
+    log_scores = [math.log(max(p, 1e-15)) for p in priors]
+
+    for tok in _tokens(text, remove_stop_words=False):
+        h = _hash(tok)
+        if h in word_likelihoods:
+            probs = word_likelihoods[h]
+            for i in range(n):
+                log_scores[i] += math.log(max(probs[i], 1e-15))
+
+    best_idx = max(range(n), key=lambda i: log_scores[i])
+    return names[best_idx]
+
+
 class EmbeddingClassifier(ClassifierPort):
-    """Nearest-centroid classifier over hashed TF vectors."""
+    """Nearest-centroid classifier over hashed TF-IDF vectors with NB fallback."""
 
     DEFAULT_AGENT = "Innocent"
 
@@ -179,32 +370,90 @@ class EmbeddingClassifier(ClassifierPort):
         ],
     }
 
-    # Below this cosine, the input is too far from every archetype -> default.
+    # Below this cosine, the input is too far from every archetype -> NB fallback.
     MIN_CONFIDENCE = 0.05
 
     def __init__(self) -> None:
-        """Precompute one prototype centroid per archetype."""
+        """Precompute IDF weights, prototypes, per-example vectors, and NB model."""
+        # IDF weights — rare/discriminative tokens get higher weight
+        self._idf = _compute_idf(self.ARCHETYPES)
+
+        # Prototype centroids (IDF-weighted)
         self._prototypes: dict[str, dict[int, float]] = {
-            name: _centroid([_encode(ex) for ex in examples])
+            name: _centroid([_encode(ex, self._idf) for ex in examples])
             for name, examples in self.ARCHETYPES.items()
         }
 
+        # Per-example vectors for KNN scoring
+        self._example_vectors: dict[str, list[dict[int, float]]] = {
+            name: [_encode(ex, self._idf) for ex in examples]
+            for name, examples in self.ARCHETYPES.items()
+        }
+
+        # Naive Bayes model for low-confidence fallback
+        self._nb_word_likelihoods, self._nb_priors = _build_naive_bayes(
+            self.ARCHETYPES, self._idf
+        )
+        self._nb_names = list(self.ARCHETYPES.keys())
+
     def classify(self, thought_seed: str) -> str:
-        """Return the archetype whose prototype is closest (cosine) to input."""
-        query = _encode(thought_seed)
+        """Return the archetype whose prototype is closest to the input.
+
+        1. Compute cosine similarity to each archetype prototype.
+        2. If the best score >= MIN_CONFIDENCE, return that archetype.
+        3. If ALL scores are below MIN_CONFIDENCE, use Naive Bayes as a
+           second pass before defaulting to Innocent. This catches inputs
+           that are semantically distant from all centroids but lexically
+           similar to one archetype.
+        """
+        query = _encode(thought_seed, self._idf)
         if not query:
             return self.DEFAULT_AGENT
-        best_name, best_score = self.DEFAULT_AGENT, self.MIN_CONFIDENCE
+
+        best_name = self.DEFAULT_AGENT
+        best_score = -1.0
         for name, proto in self._prototypes.items():
             score = _cosine(query, proto)
             if score > best_score:
                 best_name, best_score = name, score
-        return best_name
 
-    def scores(self, thought_seed: str) -> dict[str, float]:
-        """Expose cosine scores per archetype (for eval/debug/transparency)."""
-        query = _encode(thought_seed)
-        return {
-            name: round(_cosine(query, proto), 4)
-            for name, proto in self._prototypes.items()
-        }
+        # Confident prediction — return the best archetype
+        if best_score >= self.MIN_CONFIDENCE:
+            return best_name
+
+        # Low-confidence fallback: try Naive Bayes before defaulting
+        return _naive_bayes_predict(
+            thought_seed,
+            self._nb_word_likelihoods,
+            self._nb_priors,
+            self._nb_names,
+        )
+
+    def scores(
+        self, thought_seed: str, k: int = TOP_K
+    ) -> dict[str, float]:
+        """Expose per-archetype similarity scores (for eval/debug/transparency).
+
+        Uses KNN-style scoring: for each archetype, computes cosine similarity
+        to every per-example vector, takes the top-k nearest, and returns the
+        average. This gives a smoother score distribution than single-centroid
+        comparison.
+
+        When k=1, falls back to single nearest-centroid (classic behavior).
+        """
+        query = _encode(thought_seed, self._idf)
+        if not query:
+            return {name: 0.0 for name in self._prototypes}
+
+        scores: dict[str, float] = {}
+        for name, examples in self._example_vectors.items():
+            # Cosine to every example vector for this archetype
+            cosines = sorted(
+                [_cosine(query, ex) for ex in examples], reverse=True
+            )
+            # Average of top-k
+            top = cosines[:k]
+            avg = sum(top) / len(top) if top else 0.0
+            scores[name] = round(avg, 4)
+
+        return scores

@@ -88,4 +88,8 @@ class AgentService:
             "insight_therefore": agent.insight.therefore if agent.insight else "",
             "insight_archetype": agent.insight.archetype if agent.insight else "",
             "insight_confidence": agent.insight.confidence if agent.insight else 0,
+            # Phase 6: state machine, mood, and history summary
+            "state": agent.state.value if hasattr(agent, 'state') else "happy",
+            "mood": agent.mood if hasattr(agent, 'mood') else "content",
+            "state_history_count": len(agent.state_history) if hasattr(agent, 'state_history') else 0,
         }

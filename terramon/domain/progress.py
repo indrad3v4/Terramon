@@ -8,6 +8,23 @@ Failure modes this closes (roast):
 - #25 Goals: `goal_distinct` gives a concrete win condition.
 - #49 Visible Progress: level/xp/collection change every turn.
 - #40 Reward: xp is tiered by rarity, so a rare summon FEELS bigger.
+
+Convex analysis of XP curve (Phase 1 / Convex Optimization):
+  Current: XP_PER_LEVEL = 100 (constant). Level = xp // 100 + 1.
+  This is a LINEAR curve — each level requires the same absolute effort.
+  
+  Properties:
+  - f(xp) = xp/100 + 1 is affine (linear + constant) → convex and concave
+  - Marginal cost per level: constant at 100 XP
+  - Scoping: For MAX_LEVEL = 50, total XP = 49 * 100 = 4900 XP.
+    At max reward (LEGENDARY = 150 XP), that's ~33 legendary summons.
+    At COMMON (10 XP), that's 490 summons. Reasonable for casual play.
+  
+  Recommendation: LINEAR is appropriate for this game's scope. It's
+  transparent (players easily compute "2 more summons = next level")
+  and avoids the "grind wall" of exponential curves. If progression
+  feels too fast, an XP-per-level that grows as floor(N * 100 * 1.1^(N-1))
+  would give gentle convex escalation.
 """
 
 from __future__ import annotations
@@ -15,6 +32,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from terramon.domain.rarity import Rarity
+from terramon.application.math_utils import xp_to_level, level_to_xp
 
 # XP granted per rarity tier — reward scales with rarity (Lens #40).
 XP_BY_RARITY = {
@@ -38,8 +56,8 @@ class PlayerProgress:
 
     @property
     def level(self) -> int:
-        """Level derived from total XP (1-indexed)."""
-        return self.xp // XP_PER_LEVEL + 1
+        """Level derived from total XP (1-indexed). Uses math_utils for consistency."""
+        return xp_to_level(self.xp, XP_PER_LEVEL)
 
     @property
     def xp_into_level(self) -> int:

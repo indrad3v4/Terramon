@@ -10,8 +10,6 @@ are removed (TRIZ ideality: one path, not two).
 
 from __future__ import annotations
 
-import math
-
 from terramon.domain.insight import Insight
 from terramon.application.k3_insight_engine import (
     _THEME_NAMES,
@@ -19,6 +17,7 @@ from terramon.application.k3_insight_engine import (
     _BARRIER_BY_THEME,
     _BEHAVIOR_BY_BARRIER,
 )
+from terramon.application.math_utils import l2_norm, normalize
 
 # Re-export for backward compat (imported by TMA and summon_service)
 _THEMES = _THEME_NAMES  # the 12 Jungian archetypes
@@ -46,10 +45,8 @@ def encode(text: str) -> list[float]:
     vec = defaultdict(float)
     for tok in _tokens(text):
         vec[_hash(tok)] += 1.0
-    norm = math.sqrt(sum(v * v for v in vec.values()))
-    if norm == 0:
-        return [0.0] * 64
-    return [vec.get(i, 0.0) / norm for i in range(64)]
+    dense = [vec.get(i, 0.0) for i in range(64)]
+    return normalize(dense)
 
 
 def _scores(text: str) -> list[float]:

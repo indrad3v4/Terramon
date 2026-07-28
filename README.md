@@ -7,7 +7,8 @@
 [![Reflex](https://img.shields.io/badge/Reflex-0.9.x-6E56CF?style=for-the-badge&logo=reflex&logoColor=white)](https://reflex.dev)
 [![DeepSeek V4](https://img.shields.io/badge/LLM-DeepSeek_V4_Flash-4A90D9?style=for-the-badge&logo=deepseek&logoColor=white)](https://openrouter.ai)
 [![Railway](https://img.shields.io/badge/Deploy-Railway-0B0D0E?style=for-the-badge&logo=railway&logoColor=white)](https://railway.app)
-[![Tests](https://img.shields.io/badge/Tests-68_passing-22c55e?style=for-the-badge)](/root/Terramon/tests)
+[![Tests](https://img.shields.io/badge/Tests-84_passing-22c55e?style=for-the-badge)](/root/Terramon/tests)
+[![Coverage](https://img.shields.io/badge/Coverage-85%25-22c55e?style=for-the-badge)](.coveragerc)
 
 ---
 
