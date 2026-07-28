@@ -57,8 +57,9 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 # Copy the application source + pre-built frontend
 COPY --from=builder /app /app
 
-# Ensure data directory exists and is writable by the non-root user
-RUN mkdir -p /app/data && chown terramon:terramon /app/data
+# Ensure .web directory is writable by the non-root user
+RUN mkdir -p /app/data /app/.web/backend && \
+    chown -R terramon:terramon /app/data /app/.web
 
 # Switch to non-root user
 USER terramon
