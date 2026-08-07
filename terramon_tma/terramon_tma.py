@@ -707,7 +707,7 @@ class TerramonState(rx.State):
         """
         import json as _json
         markers = [
-            [c["lat"], c["lon"], c.get("agent", ""), c.get("thought", "")]
+            [c["lat"], c["lon"], c.get("agent", ""), c["thought"]]
             for c in self.global_creatures[:100]
             if c.get("lat") and c.get("lon")
         ]
@@ -925,19 +925,25 @@ class TerramonState(rx.State):
     # ── P3 M04: Creature trading ──────────────────────────────────────
 
     @rx.event
-    def show_trade_dialog(self, seed_id: int = 0, name: str = "", rarity: str = ""):
-        """Open the trade listing dialog for a creature.
-
-        Computes minimum price = embedding_uniqueness_score × base_price.
-        """
+    def set_trade_target(self, seed_id: int = 0, name: str = "", rarity: str = ""):
+        """UI-facing setter: stores the tapped creature (Var-safe assignments only).
+        The domain event show_trade_dialog() runs without Var args."""
         self.trade_target_id = seed_id
         self.trade_target_name = name
         self.trade_target_rarity = rarity
+
+    @rx.event
+    def open_trade_dialog(self):
+        """Open the trade listing dialog for the creature selected via set_trade_target.
+
+        Computes minimum price = embedding_uniqueness_score × base_price.
+        """
         self.trade_price_input = ""
         self.trade_message = ""
 
         # Compute minimum price
         try:
+            rarity = self.trade_target_rarity
             rarity_enum = Rarity(rarity) if rarity else Rarity.COMMON
             from terramon.domain.rarity import RARITY_PRICE
             base_price = RARITY_PRICE.get(rarity_enum, 0)
@@ -949,7 +955,7 @@ class TerramonState(rx.State):
                     from terramon.adapters.json_memory import SqliteMemory
                     if isinstance(_MEMORY, SqliteMemory):
                         sid = getattr(s, 'id', None) or 0
-                        if sid == seed_id and s.insight and s.insight.embedding:
+                        if sid == self.trade_target_id and s.insight and s.insight.embedding:
                             bonus = _MEMORY.compute_uniqueness_bonus(s.insight.embedding)
                             break
                 from terramon.application.payment_gate import PaymentGate
@@ -1257,6 +1263,7 @@ class TerramonState(rx.State):
 def _seed_to_card(seed: ThoughtSeed) -> dict:
     rarity = seed.rarity if isinstance(seed.rarity, str) else seed.rarity.value
     card = {
+        "id": getattr(seed, "id", 0),  # stable contract: trade/select need the DB id
         "agent": seed.summoned_agent,
         "rarity": rarity,
         "sigil": _RARITY_SIGIL.get(rarity, "·"),
@@ -1269,12 +1276,14 @@ def _seed_to_card(seed: ThoughtSeed) -> dict:
         # P3 M04: Trade info
         "for_trade": getattr(seed, 'for_trade', False),
         "trade_price_sats": getattr(seed, 'trade_price_sats', 0),
+        # G04: geographic anchor — lat/lon for static map, place name fallback.
+        # Stable contract: keys ALWAYS present (None when no geo) so the UI layer
+        # can index them directly without .get() (Var has no .get in Reflex 0.9.8).
+        "lat": getattr(seed, "lat", None),
+        "lon": getattr(seed, "lon", None),
+        "place": getattr(seed, "place_name", "")
+                 or (f"{getattr(seed, 'lat', 0):.2f}, {getattr(seed, 'lon', 0):.2f}" if getattr(seed, "lat", None) is not None else ""),
     }
-    # G04: geographic anchor — lat/lon for static map, place name fallback
-    if seed.lat or seed.lon or seed.place_name:
-        card["lat"] = seed.lat
-        card["lon"] = seed.lon
-        card["place"] = seed.place_name or f"{seed.lat:.2f}, {seed.lon:.2f}"
     return card
 
 
@@ -1287,7 +1296,7 @@ def terra_card(item: dict) -> rx.Component:
         rx.vstack(
             # I12: Released badge for wild creatures
             rx.cond(
-                item.get("released", False),
+                item["released"],
                 rx.hstack(
                     rx.text("\U0001f54a\ufe0f", font_size="0.7em"),
                     rx.text("WILD", font_size="0.5em", color="#6b7280",
@@ -1305,26 +1314,26 @@ def terra_card(item: dict) -> rx.Component:
                 item["sigil"],
                 font_size="1.8em",
                 letter_spacing="0.2em",
-                color=rx.cond(item.get("released", False), "#6b7280", item["color"]),
+                color=rx.cond(item["released"], "#6b7280", item["color"]),
                 text_shadow=f"0 0 16px {item['color']}66",
             ),
             rx.heading(item["agent"], size="5",
-                       color=rx.cond(item.get("released", False), "#6b7280", item["color"])),
+                       color=rx.cond(item["released"], "#6b7280", item["color"])),
             rx.text(item["thought"], font_style="italic",
                     color="#9ca3af", font_size="0.75em", max_width="200px"),
-            # G04: birthplace
+            # G04: birthplace (map image if both lat+lon present, else place text)
             rx.cond(
-                item.get("lat") and item.get("lon"),
+                (item["lat"] != None) & (item["lon"] != None),
                 rx.image(
                     src=f"https://staticmap.openstreetmap.de/staticmap.php?center={item['lat']},{item['lon']}&zoom=14&size=280x160",
                     width="100%",
                     height="auto",
                     border_radius="6px",
                     border="1px solid #27272a",
-                    opacity=rx.cond(item.get("released", False), "0.6", "1.0"),
+                    opacity=rx.cond(item["released"], "0.6", "1.0"),
                 ),
                 rx.cond(
-                    item.get("place"),
+                    item["place"],
                     rx.hstack(
                         rx.text("\U0001f4cd", font_size="0.7em"),
                         rx.text(item["place"], font_size="0.65em", color="#6b7280"),
@@ -1336,12 +1345,12 @@ def terra_card(item: dict) -> rx.Component:
             ),
             # P3 M04: Trade button inside the vstack (positional args before keywords)
             rx.cond(
-                ~item.get("released", False),
+                ~item["released"],
                 rx.cond(
-                    item.get("for_trade", False),
+                    item["for_trade"],
                     rx.box(
                         rx.text(
-                            f"↔ Trading · {item.get('trade_price_sats', 0)} sats",
+                            f"↔ Trading · {item['trade_price_sats']} sats",
                             font_size="0.55em", color="#f59e0b",
                             font_weight="bold",
                             background="rgba(245,158,11,0.1)",
@@ -1353,11 +1362,12 @@ def terra_card(item: dict) -> rx.Component:
                     ),
                     rx.button(
                         "↔ List for Trade",
-                        on_click=lambda: TerramonState.show_trade_dialog(
-                            item.get("id", 0),
-                            item["agent"],
-                            item["rarity"],
-                        ),
+                        on_click=[
+                            TerramonState.set_trade_target(
+                                item["id"], item["agent"], item["rarity"]
+                            ),
+                            TerramonState.open_trade_dialog,
+                        ],
                         size="1",
                         variant="ghost",
                         color_scheme="amber",
@@ -1376,11 +1386,11 @@ def terra_card(item: dict) -> rx.Component:
         border_left=f"3px solid {item['color']}",
         border_radius="12px",
         padding="0.8em",
-        background=rx.cond(item.get("released", False), "#111115", "#141418"),
+        background=rx.cond(item["released"], "#111115", "#141418"),
         width="100%",
-        opacity=rx.cond(item.get("released", False), "0.7", "1.0"),
+        opacity=rx.cond(item["released"], "0.7", "1.0"),
         _hover=rx.cond(
-            item.get("released", False),
+            item["released"],
             {},
             {"transform": "scale(1.02)", "border_color": item["color"]},
         ),
@@ -2212,10 +2222,10 @@ def earth_map() -> rx.Component:
                             lambda c: rx.hstack(
                                 rx.text("🃏", font_size="0.8em"),
                                 rx.vstack(
-                                    rx.text(c.get("agent", "unknown"),
+                                    rx.text(c["agent"],
                                             font_size="0.7em", color="#e5e7eb",
                                             font_weight="bold"),
-                                    rx.text(c.get("thought", ""),
+                                    rx.text(c["thought"],
                                             font_size="0.6em", color="#9ca3af",
                                             max_width="200px"),
                                     spacing="0",
