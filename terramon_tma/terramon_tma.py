@@ -171,6 +171,7 @@ class TerramonState(rx.State):
     intelligence: int = 0
     photo_mode: bool = False
     summoning: bool = False  # animation flag (SIN 1 fix: loading state)
+    evolve_animating: bool = False  # evolution animation flag (set by evolve_agent)
     celebration_dismissed: bool = False  # F2: Tamer Unlock celebration dismissed
 
     # B1: LLM-generated creature greeting on summon
