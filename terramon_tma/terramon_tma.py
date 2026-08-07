@@ -2321,6 +2321,30 @@ _CELEBRATION_STYLE = """
 }
 """
 
+# ── Evolution animation keyframes (used by evolve_agent / evolve_animating) ──
+# Shimmer sweep, burst stars, card scale + tutorial fade. All four were
+# referenced in UI but the constant was lost — restoring here.
+_EVOLVE_STYLE = """
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+@keyframes evolutionShimmer {
+    0% { background-position: 0% 0; }
+    100% { background-position: 100% 0; }
+}
+@keyframes evolutionBurst {
+    0% { transform: scale(0) rotate(-45deg); opacity: 0; }
+    60% { transform: scale(1.5) rotate(10deg); opacity: 1; }
+    100% { transform: scale(1) rotate(0deg); opacity: 0.9; }
+}
+@keyframes evolutionScale {
+    0% { transform: scale(0.85); filter: brightness(1.6); }
+    60% { transform: scale(1.06); }
+    100% { transform: scale(1); filter: brightness(1); }
+}
+"""
+
 
 def celebration_component() -> rx.Component:
     """Full-screen celebration overlay when player reaches 5/5 distinct creatures.
