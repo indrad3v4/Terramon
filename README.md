@@ -28,6 +28,8 @@ Behind every creature is an **Insight Engine** — a neural network that extract
 
 Open [t.me/terrramonBot/terramon](https://t.me/terrramonBot/terramon) on your phone — no install, no login. Type a thought and summon your first creature in 3 seconds.
 
+> 🗄 **History:** Terramon's gameplay concepts (geo-creatures, tasks, wallet) trace back to the React prototype [ai-game-synergy-realm](https://github.com/indrad3v4/ai-game-synergy-realm) (archived 2026-08-07). The Python/Reflex architecture here supersedes it.
+
 ---
 
 ## 🧠 Architecture
