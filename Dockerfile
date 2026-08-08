@@ -93,6 +93,8 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
 # Run cleanup of old portrait files on startup (30-day retention).
 # Phase 17: prevents unbounded disk growth from generated images.
 RUN echo '#!/bin/sh\n\
+echo "[startup] Ensuring /app/data writable (Railway volume)"\n\
+chmod -R 777 /app/data 2>/dev/null || true\n\
 find /app/data/creatures -name "*.png" -type f -mtime +30 -delete 2>/dev/null || true\n\
 find /app/data/creatures/thumbnails -name "*.png" -type f -mtime +30 -delete 2>/dev/null || true\n\
 find /app/data/creatures/placeholders -name "*.png" -type f -mtime +30 -delete 2>/dev/null || true\n\
