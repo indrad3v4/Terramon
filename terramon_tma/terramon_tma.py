@@ -1445,8 +1445,9 @@ def terra_card(item: dict) -> rx.Component:
             # G04: birthplace (map image if BOTH real coords present, else place text)
             # Fix: lat/lon default to 0.0 when no geo — `!= None` passed for 0,
             # rendering an open-ocean map at (0,0). Require non-None AND non-zero.
+            # NOTE: Reflex Vars do NOT support `in`/`not in` — bitwise ops only.
             rx.cond(
-                (item["lat"] not in (None, 0)) & (item["lon"] not in (None, 0)),
+                (item["lat"] != None) & (item["lat"] != 0) & (item["lon"] != None) & (item["lon"] != 0),
                 rx.image(
                     src=static_map_endpoint_path(item["lat"], item["lon"], zoom=14, width=280, height=160),
                     width="100%",
