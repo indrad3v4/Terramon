@@ -1442,9 +1442,11 @@ def terra_card(item: dict) -> rx.Component:
                        color=rx.cond(item["released"], "#6b7280", item["color"])),
             rx.text(item["thought"], font_style="italic",
                     color="#9ca3af", font_size="0.75em", max_width="200px"),
-            # G04: birthplace (map image if both lat+lon present, else place text)
+            # G04: birthplace (map image if BOTH real coords present, else place text)
+            # Fix: lat/lon default to 0.0 when no geo — `!= None` passed for 0,
+            # rendering an open-ocean map at (0,0). Require non-None AND non-zero.
             rx.cond(
-                (item["lat"] != None) & (item["lon"] != None),
+                (item["lat"] not in (None, 0)) & (item["lon"] not in (None, 0)),
                 rx.image(
                     src=static_map_endpoint_path(item["lat"], item["lon"], zoom=14, width=280, height=160),
                     width="100%",
@@ -2936,7 +2938,7 @@ def index() -> rx.Component:
                             overflow="hidden",
                             flex="1",
                         ),
-                        rx.text(TerramonState.xp.to_string() + "/100",
+                        rx.text(TerramonState.xp_into_level.to_string() + "/100",
                                 color="#6b7280", font_size="0.6em"),
                         rx.cond(
                             TerramonState.goal_reached,
