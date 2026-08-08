@@ -11,4 +11,8 @@ config = rx.Config(
     app_name="terramon_tma",
     telemetry_enabled=False,
     disable_plugins=[SitemapPlugin],
+    # TMA fix: Telegram WebView blocks/breaks WebSocket to third-party hosts,
+    # so on_click events never reach the backend (tutorial "Got it!" dead,
+    # SUMMON dead — every button). HTTP polling works in any WebView.
+    transport="polling",
 )
