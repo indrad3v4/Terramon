@@ -37,10 +37,19 @@ RUN reflex export --frontend-only --no-zip --loglevel debug
 # ── Stage 2: Runtime ──────────────────────────────────────────────────
 FROM python:3.13-slim AS runtime
 
-# Install only runtime packages (not build tools)
+# Runtime needs unzip too: reflex run may re-validate frontend deps at
+# startup and falls back to installing bun itself if the copied binary
+# is missing or the version check fails (lesson: build stage tools !=
+# runtime stage tools is a classic Docker drift bug).
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
+    curl unzip \
     && rm -rf /var/lib/apt/lists/*
+
+# Copy the bun binary fetched during build so runtime never re-downloads it.
+# REFLEX_USE_SYSTEM_BUN=true makes Reflex use `which bun` (PATH) instead of
+# its own $REFLEX_DIR/bun — deterministic, no network at startup.
+COPY --from=builder /root/.local/share/reflex/bun/bin/bun /usr/local/bin/bun
+ENV REFLEX_USE_SYSTEM_BUN=true
 
 # Create a non-root user for security
 RUN groupadd -r terramon && \
@@ -59,9 +68,11 @@ COPY --from=builder /app /app
 
 # Ensure .web directory is writable by the non-root user
 # Also pre-create stateful_pages.json so Reflex doesn't try to create it at runtime
-RUN mkdir -p /app/data /app/.web/backend && \
+# REFLEX_DIR (/app/.local/share/reflex) must exist + be writable: non-root reflex
+# writes logs/config there on startup (verified via platformdirs resolution).
+RUN mkdir -p /app/data /app/.web/backend /app/.local/share/reflex && \
     touch /app/.web/backend/stateful_pages.json && \
-    chown -R terramon:terramon /app/data /app/.web/backend/stateful_pages.json /app/.web
+    chown -R terramon:terramon /app/data /app/.web/backend/stateful_pages.json /app/.web /app/.local/share/reflex
 
 # Switch to non-root user
 USER terramon
