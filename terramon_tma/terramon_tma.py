@@ -61,8 +61,47 @@ from terramon.application.insight_engine import _scores, _THEMES
 from terramon.application.agent_service import AgentService
 from terramon.application.llm_behavior import set_api_key as _init_llm
 from terramon.domain.creature_agent import CreatureAgent
-from terramon.domain.insight import Insight
+from terramon.domain.insight import GeoContext, Insight
 from tools.time_tool import get_current_time
+
+# ── G05: Geo-capture support (Telegram LocationButton → geolocation API) ──
+# Returns {lat, lon} from the Telegram native location picker when inside a
+# Mini App, else falls back to the browser geolocation API. Wrapped in a
+# Promise with a 60 s timeout; resolves null on denial/timeout (degraded
+# path: the creature is born "в неизвестном месте").
+_LOCATION_JS = '''(async () => {
+  const tg = window.Telegram?.WebApp;
+  if (tg && tg.LocationButton) {
+    tg.LocationButton.show();
+    return await new Promise((resolve) => {
+      const t = setTimeout(() => { tg.LocationButton.hide(); resolve(null); }, 60000);
+      tg.onEvent('location_accessed', (loc) => {
+        clearTimeout(t); tg.LocationButton.hide();
+        resolve({ lat: loc.latitude, lon: loc.longitude });
+      });
+    });
+  }
+  return await new Promise((resolve) => {
+    if (!navigator.geolocation) return resolve(null);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => resolve({ lat: pos.coords.latitude, lon: pos.coords.longitude }),
+      () => resolve(null),
+      { timeout: 10000, maximumAge: 300000 });
+  });
+})()'''
+
+
+def _validate_coords(coords) -> tuple[float | None, float | None]:
+    """None-safe lat/lon validation (-90..90 / -180..180). Garbage → (None, None)."""
+    try:
+        lat = float(coords["lat"])
+        lon = float(coords["lon"])
+    except (TypeError, ValueError, KeyError):
+        return None, None
+    if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
+        return None, None
+    return lat, lon
+
 
 # Initialize LLM-powered creature behavior from env
 import os
@@ -252,6 +291,12 @@ class TerramonState(rx.State):
     agent_lat: float = 0.0
     agent_lon: float = 0.0
 
+    # G05: Geo-capture state — '' | 'granted' | 'denied'
+    geo_status: str = ""
+    geo_lat: float = 0.0
+    geo_lon: float = 0.0
+    geo_place: str = ""
+
     # TERRA vision: the creature's own words about its birthplace
     # (generated lazily via see_birthplace, cached in this field)
     home_lore: str = ""
@@ -294,6 +339,13 @@ class TerramonState(rx.State):
     # I12: Release mechanic — creature goes into the wild
     show_release_dialog: bool = False
     wild_tamer_badge: bool = False
+
+    # I12 v2: Release with final words + receipt ("Встреча, а не коллекция")
+    final_words: str = ""
+    released_place: str = ""
+    released_words: str = ""
+    released_just_now: bool = False
+    released_count: int = 0  # reframed win counter — released-based ("Встречено X из 5")
 
     # P3 M04: Creature trading
     show_trade_dialog: bool = False
@@ -346,6 +398,42 @@ class TerramonState(rx.State):
     def set_thought(self, value: str):
         self.thought = value
 
+    # ── G05: Geo capture ─────────────────────────────────────────────
+
+    def _apply_coords(self, coords) -> None:
+        """Validate + store captured coordinates (shared by capture paths)."""
+        lat, lon = _validate_coords(coords)
+        if lat is None or lon is None:
+            self.geo_status = "denied"
+        else:
+            self.geo_status = "granted"
+            self.geo_lat, self.geo_lon = lat, lon
+
+    @rx.event
+    def capture_location(self):
+        """G05: request device coordinates — Telegram LocationButton (native
+        picker) with navigator.geolocation fallback. Result lands in
+        geo_status / geo_lat / geo_lon."""
+        coords = None
+        try:
+            coords = yield rx.call_script(_LOCATION_JS)
+        except Exception:
+            coords = None
+        self._apply_coords(coords)
+
+    def _refresh_released_count(self) -> None:
+        """Reframe: 'Встречено X из 5' reads the released-based win counter."""
+        try:
+            self.released_count = int(_LOOP.progress.released_count())
+        except Exception:
+            try:
+                seeds = _MEMORY.load_all_seeds()
+                self.released_count = sum(
+                    1 for s in seeds if getattr(s, "status", "") == "released"
+                )
+            except Exception:
+                pass
+
     @rx.event
     def summon(self):
         """Summon a creature from thought."""
@@ -356,8 +444,22 @@ class TerramonState(rx.State):
             self.summoning = False
             return
         self.summoning = True
+        # G05: FIRST summon — capture location first so the creature is born
+        # anchored to a real place. Denied/timeout → geo=None → the creature
+        # is born "в неизвестном месте" (0,0 is a valid state, not a blocker).
+        if self.summon_count == 0 and self.geo_status == "":
+            try:
+                coords = yield rx.call_script(_LOCATION_JS)
+            except Exception:
+                coords = None
+            self._apply_coords(coords)
         try:
-            result = _LOOP.take_turn(text, color=False)
+            _geo = (
+                GeoContext(self.geo_lat, self.geo_lon, self.geo_place)
+                if self.geo_status == "granted"
+                else None
+            )
+            result = _LOOP.take_turn(text, color=False, geo=_geo)
             rarity = result.rarity
             self.agent = result.agent
             self.rarity = rarity
@@ -412,6 +514,12 @@ class TerramonState(rx.State):
                 self.agent_lat = g.lat
                 self.agent_lon = g.lon
                 self.place = g.place_name or f"{g.lat:.2f}, {g.lon:.2f}"
+                # G05: backfill geo-capture state from the seed (the backend
+                # reverse-geocodes and fills place_name).
+                self.geo_place = g.place_name or ""
+                self.geo_lat, self.geo_lon = g.lat, g.lon
+                if g.place_name or (g.lat != 0.0 or g.lon != 0.0):
+                    self.geo_status = "granted"
         except Exception as e:
             log.error(f"take_turn failed: {e}", exc_info=True)
             self.summoning = False
@@ -659,6 +767,8 @@ class TerramonState(rx.State):
             self.tier_badge = _LOOP.progress.current_tier_badge
             self.next_tier_name = _LOOP.progress.next_tier_name
             self.next_tier_distinct = _LOOP.progress.next_tier_requirement
+            # G05: released-based win counter for the "Встречено X из 5" display
+            self._refresh_released_count()
 
         # Phase 4: tick decay on app open (retention)
         if seeds:
@@ -996,6 +1106,116 @@ class TerramonState(rx.State):
         except Exception as e:
             log.warning(f"Terra reload after release failed: {e}")
 
+        # G05 reframe: released-based win counter (idempotent set add)
+        try:
+            _LOOP.progress.record_release(self.agent)
+        except Exception as e:
+            log.warning(f"record_release failed: {e}")
+        self._refresh_released_count()
+
+    # ── I12 v2: Release with final words ─────────────────────────────
+
+    @rx.event
+    def set_final_words(self, value: str):
+        """I12 v2: bind the dialog textarea to state."""
+        self.final_words = value
+
+    @rx.event
+    def release_creature(self):
+        """I12 v2: release via the domain CreatureAgent — the creature is
+        freed (status 'released'), its needs freeze, and the player's
+        goodbye is kept in final_words. Refreshes the released-based
+        progress + terra, then shows the release receipt."""
+        self.show_release_dialog = False
+        if self.agent_evolution < 2:
+            self.agent_message = "Not ready. Evolve to stage 2 first."
+            return
+        words = self.final_words.strip()
+        self.final_words = ""
+
+        # Domain release — liberation, not death (needs frozen, words kept)
+        try:
+            _agent = CreatureAgent(
+                agent_id=self.agent,
+                archetype=self.agent,
+                level=self.level,
+                evolution_stage=self.agent_evolution,
+                lat=self.agent_lat,
+                lon=self.agent_lon,
+                place_name=self.place,
+            )
+            _msg = _agent.release(words)
+            self.agent_message = _msg.text
+        except Exception as e:
+            log.warning(f"Release failed: {e}")
+            self.agent_message = "Something went wrong releasing this creature."
+
+        # Reframe: record the release in the win counter
+        try:
+            _LOOP.progress.record_release(self.agent)
+        except Exception as e:
+            log.warning(f"record_release failed: {e}")
+
+        # Publish CreatureReleased event (global map + Nostr, when configured)
+        try:
+            from terramon.events.creature_released import CreatureReleased
+            import datetime
+            _evt = CreatureReleased(
+                agent_id=self.agent,
+                agent_name=self.agent_name or self.agent,
+                archetype=self.agent,
+                thought_seed=self.thought,
+                lat=self.agent_lat,
+                lon=self.agent_lon,
+                place_name=self.place,
+                evolution_stage=self.agent_evolution,
+                level=self.level,
+                rarity=self.rarity,
+                release_timestamp=datetime.datetime.now().isoformat(),
+                previous_owner="player",
+            )
+            from terramon.adapters.nostr_publisher import NostrPublisher
+            _pub = NostrPublisher()
+            if _pub.seckey_hex:
+                _pub.on_creature_released(_evt)
+        except Exception as e:
+            log.warning(f"Nostr publish for release failed: {e}")
+
+        # Award ★ Wild Tamer badge (legacy badge kept)
+        self.wild_tamer_badge = True
+
+        # Receipt for the "Встреча, а не коллекция" moment
+        self.released_place = self.place or self.geo_place or "неизвестное место"
+        self.released_words = words
+        self.released_just_now = True
+
+        # Reset creature stats (removed from active care)
+        self.agent_hunger = 0
+        self.agent_energy = 0
+        self.agent_happiness = 0
+        self.agent_evolution = 0
+        self.agent_name = ""
+        self.agent_last_message = ""
+
+        # Mark seed as released in memory
+        try:
+            seeds = _MEMORY.load_all_seeds()
+            if seeds:
+                for s in reversed(seeds):
+                    if s.summoned_agent == self.agent and s.raw_input == self.thought:
+                        s.status = "released"
+                        break
+        except Exception as e:
+            log.warning(f"Failed to update seed status: {e}")
+
+        # Reload terra + refresh the released-based counter
+        try:
+            seeds = _MEMORY.load_all_seeds()
+            self.terra = [_seed_to_card(s) for s in seeds]
+        except Exception as e:
+            log.warning(f"Terra reload after release failed: {e}")
+        self._refresh_released_count()
+
     # ── P3 M04: Creature trading ──────────────────────────────────────
 
     @rx.event
@@ -1202,7 +1422,7 @@ class TerramonState(rx.State):
             f"🃏 Terramon — {self.agent}\n"
             f"✦ Rarity: {self.rarity} {self.sigil}\n"
             f"   \"{self.thought}\"\n"
-            f"Lv.{self.level} · {self.distinct}/5 Tamer\n"
+            f"Lv.{self.level} · Встречено {self.released_count} из 5 мыслей\n"
             f"🌍 terramon.app"
         )
         yield rx.set_clipboard(card)
@@ -1527,9 +1747,8 @@ def progress_header() -> rx.Component:
     return rx.box(
         rx.vstack(
             rx.text(
-                "Lv." + TerramonState.level.to_string() + " · "
-                + TerramonState.distinct.to_string() + "/"
-                + TerramonState.goal.to_string() + " to Tamer",
+                "Встречено " + TerramonState.released_count.to_string()
+                + " из 5 мыслей",
                 color="#e5e7eb",
                 font_size="0.85em",
                 font_weight="bold",
@@ -1556,6 +1775,13 @@ def progress_header() -> rx.Component:
                 TerramonState.xp.to_string() + " XP",
                 color="#6b7280",
                 font_size="0.7em",
+            ),
+            # G05 reframe: badge earned when 5 thoughts are released
+            rx.cond(
+                TerramonState.released_count >= 5,
+                rx.text("★ Встретивший", color="#f59e0b", font_size="0.75em",
+                        font_weight="bold"),
+                rx.fragment(),
             ),
             spacing="1",
             align="center",
@@ -1638,8 +1864,8 @@ def creature_card() -> rx.Component:
             # Level + collected + intelligence (SIN 10 typography hierarchy)
             rx.hstack(
                 rx.text("Lv." + TerramonState.level.to_string(), color="#e5e7eb"),
-                rx.text(TerramonState.distinct.to_string() + "/" +
-                        TerramonState.goal.to_string() + " collected", color="#e5e7eb"),
+                rx.text("Встречено " + TerramonState.released_count.to_string()
+                        + " из 5", color="#e5e7eb"),
                 spacing="4",
             ),
             # Lesson 05: confidence
@@ -2000,6 +2226,36 @@ def creature_care_panel() -> rx.Component:
                     ),
                     rx.fragment(),
                 ),
+                # I12 v2: Release receipt — shown right after release
+                rx.cond(
+                    TerramonState.released_just_now,
+                    rx.box(
+                        rx.vstack(
+                            rx.text("✓ Отпущено: " + TerramonState.released_place,
+                                    font_size="0.8em", color="#22c55e",
+                                    font_weight="bold", text_align="center"),
+                            rx.cond(
+                                TerramonState.released_words != "",
+                                rx.text('"' + TerramonState.released_words + '"',
+                                        font_size="0.75em", color="#d8b4fe",
+                                        font_style="italic", text_align="center"),
+                                rx.fragment(),
+                            ),
+                            rx.text("Поделись: я отпустил свою мысль",
+                                    font_size="0.65em", color="#6b7280",
+                                    font_style="italic", text_align="center"),
+                            spacing="1",
+                            align="center",
+                            width="100%",
+                        ),
+                        padding="0.6em 0.8em",
+                        background="#1a2e1a",
+                        border="1px solid #22c55e44",
+                        border_radius="10px",
+                        width="100%",
+                    ),
+                    rx.fragment(),
+                ),
                 # I10: Grazed while away notification
                 rx.cond(
                     TerramonState.grazed_away_message != "",
@@ -2049,14 +2305,14 @@ def creature_care_panel() -> rx.Component:
                               variant="outline", size="2", width="100%",
                               color_scheme="indigo"),
                 ),
-                # I12: Release button — visible when evolution_stage >= 2
+                # I12 v2: Release button — subtle ghost, visible at stage >= 2
                 rx.cond(
                     TerramonState.agent_evolution >= 2,
                     rx.button(
-                        "🕊️ Release to Wild",
+                        "💨 Отпустить",
                         on_click=TerramonState.show_release,
-                        variant="outline", size="2", width="100%",
-                        color_scheme="red",
+                        variant="ghost", size="2", width="100%",
+                        color_scheme="red", font_size="0.8em",
                         _hover={"opacity": "0.8"},
                     ),
                     rx.fragment(),
@@ -2612,7 +2868,7 @@ def celebration_component() -> rx.Component:
 
 
 def release_dialog() -> rx.Component:
-    """I12: Release confirmation dialog — shown when player clicks 'Release to Wild'.
+    """I12 v2: Release confirmation dialog — '💨 Отпустить' + final words.
 
     Confirms the release action before the creature goes into the wild.
     The creature is removed from active care but stays in terra as a memorial.
@@ -2621,39 +2877,40 @@ def release_dialog() -> rx.Component:
         TerramonState.show_release_dialog,
         rx.box(
             rx.vstack(
-                rx.text("🕊️", font_size="2.5em"),
-                rx.heading("Release to Wild?", size="5", color="#e5e7eb",
+                rx.text("💨", font_size="2.5em"),
+                rx.heading("Отпустить?", size="5", color="#e5e7eb",
                            font_weight="bold"),
                 rx.text(
-                    f"This will release {TerramonState.agent_name} "
-                    f"(Lv.{TerramonState.level}, Stage {TerramonState.agent_evolution}) "
-                    f"into the wild. It will be visible on the global map for "
-                    f"all players to encounter.",
+                    "Существо останется жить на месте рождения. Это нельзя отменить.",
                     font_size="0.75em", color="#9ca3af",
                     text_align="center", max_width="300px",
                 ),
+                rx.text_area(
+                    placeholder="Последние слова (необязательно)...",
+                    value=TerramonState.final_words,
+                    on_change=TerramonState.set_final_words,
+                    size="1",
+                    variant="soft",
+                    color_scheme="gray",
+                    width="100%",
+                    min_height="3em",
+                ),
                 rx.text(
-                    "Your creature stays in terra as a memorial. "
-                    "You can no longer interact with it.",
+                    "Оно уйдёт в дикий мир, но останется в терре как память.",
                     font_size="0.7em", color="#6b7280",
                     text_align="center", max_width="300px",
                     font_style="italic",
                 ),
-                rx.text(
-                    "★ Wild Tamer badge earned!",
-                    font_size="0.7em", color="#f59e0b",
-                    text_align="center", font_weight="bold",
-                ),
                 rx.hstack(
                     rx.button(
-                        "Cancel",
+                        "Отмена",
                         on_click=TerramonState.hide_release,
                         variant="soft", size="2",
                         color_scheme="gray", width="50%",
                     ),
                     rx.button(
-                        "🕊️ Release",
-                        on_click=TerramonState.confirm_release,
+                        "💨 Отпустить",
+                        on_click=TerramonState.release_creature,
                         variant="solid", size="2",
                         color_scheme="red", width="50%",
                     ),
@@ -2758,14 +3015,13 @@ def index() -> rx.Component:
                                         color="#f59e0b", font_weight="bold",
                                         font_size="0.7em"),
                                 rx.cond(
-                                    TerramonState.next_tier_name != "",
+                                    TerramonState.released_count >= 5,
+                                    rx.text("★ Встретивший", color="#22c55e",
+                                            font_weight="bold", font_size="0.65em"),
                                     rx.text(
-                                        "→ " + TerramonState.next_tier_name.to_string()
-                                        + " (" + TerramonState.distinct.to_string() + "/"
-                                        + TerramonState.next_tier_distinct.to_string() + ")",
-                                        color="#a78bfa", font_size="0.65em",
+                                        "Встречено " + TerramonState.released_count.to_string()
+                                        + " из 5", color="#a78bfa", font_size="0.65em",
                                     ),
-                                    rx.fragment(),
                                 ),
                                 spacing="1",
                                 align="center",
@@ -2945,7 +3201,7 @@ def index() -> rx.Component:
                             TerramonState.goal_reached,
                             rx.hstack(
                                 rx.text("★", color="#f59e0b", font_size="0.8em"),
-                                rx.text("Tamer", color="#f59e0b", font_size="0.6em",
+                                rx.text("Встретивший", color="#f59e0b", font_size="0.6em",
                                         font_weight="bold"),
                                 spacing="1",
                                 align="center",
@@ -2983,6 +3239,50 @@ def index() -> rx.Component:
                             size="2",
                             variant="soft",
                             color_scheme="gray",
+                        ),
+                        # G05: geo status line + re-anchor (compact, one line)
+                        rx.cond(
+                            TerramonState.geo_status != "",
+                            rx.hstack(
+                                rx.cond(
+                                    TerramonState.geo_status == "granted",
+                                    rx.hstack(
+                                        rx.text("📍", font_size="0.6em"),
+                                        rx.text(
+                                            rx.cond(
+                                                TerramonState.place != "",
+                                                TerramonState.place,
+                                                TerramonState.geo_lat.to_string() + ", "
+                                                + TerramonState.geo_lon.to_string(),
+                                            ),
+                                            font_size="0.55em", color="#6b7280",
+                                        ),
+                                        rx.button("⟳",
+                                                  on_click=TerramonState.capture_location,
+                                                  size="1", variant="ghost",
+                                                  color_scheme="gray",
+                                                  padding="0 0.3em",
+                                                  font_size="0.6em"),
+                                        spacing="1",
+                                        align="center",
+                                    ),
+                                    rx.text("📍 место не определено — существо родится "
+                                            "«в неизвестном месте»",
+                                            font_size="0.55em", color="#6b7280",
+                                            font_style="italic"),
+                                ),
+                                width="100%",
+                                justify="center",
+                                padding="0.1em 0",
+                            ),
+                            rx.cond(
+                                TerramonState.summon_count == 0,
+                                rx.text("📍 первый призыв закрепит мысль на планете",
+                                        font_size="0.55em", color="#6b7280",
+                                        font_style="italic",
+                                        padding="0.1em 0"),
+                                rx.fragment(),
+                            ),
                         ),
                         rx.hstack(
                             rx.button("📷", on_click=TerramonState.capture,

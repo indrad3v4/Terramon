@@ -50,7 +50,8 @@ class GameLoop:
         self.progress = progress or PlayerProgress()
         self.tournament_service = tournament_service or GeoTournamentService()
 
-    def take_turn(self, raw_input: str, color: bool = True, today: str | None = None) -> TurnResult:
+    def take_turn(self, raw_input: str, color: bool = True,
+                  today: str | None = None, geo=None) -> TurnResult:
         """One full loop turn: summon -> reward -> reflect.
 
         Args:
@@ -58,6 +59,8 @@ class GameLoop:
             color: Whether to use ANSI colors in the reveal.
             today: Date string "YYYY-MM-DD" for streak tracking.
                 Defaults to today's date if None.
+            geo: Optional GeoContext (capture path) anchoring the summoned
+                creature to a real place; threaded straight into summon().
         """
         if today is None:
             from datetime import datetime
@@ -69,7 +72,7 @@ class GameLoop:
 
         # I09: Pass rare probability boost from streak to the summon
         rare_boost = self.progress.rare_probability_boost
-        seed = self.service.summon(raw_input, rare_boost=rare_boost)
+        seed = self.service.summon(raw_input, rare_boost=rare_boost, geo=geo)
 
         # rarity comes back as a string on the seed; map to the enum for XP.
         rarity = Rarity(seed.rarity)

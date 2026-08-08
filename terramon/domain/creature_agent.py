@@ -333,8 +333,14 @@ class CreatureAgent:
     grazed_while_away: bool = False  # set True by _apply_tick when auto-graze triggers
 
     # ── I12: Release mechanic — creature goes into the wild ─────────
+    # Win concept "Встреча, а не коллекция": release is the reward —
+    # a creature is liberated, not collected. Released creatures are
+    # free: needs are frozen (no decay), the goodbye is remembered.
     released: bool = False
     release_timestamp: float = 0.0
+    status: str = "active"   # "active" | "released"
+    released_at: str = ""    # human-readable release time
+    final_words: str = ""    # the player's goodbye at release
 
     @property
     def resonance_bonus_stats(self) -> dict[str, int]:
@@ -609,6 +615,27 @@ class CreatureAgent:
                 self.dormant_ticks = 0
             return self._check_urgent_needs()
 
+        # ── I12: Released — needs frozen, creature is free ────────────
+        # Release is a reward, not death: a released creature no longer
+        # decays. Its needs are frozen at the moment of release — the
+        # burden of care is lifted, and no death/decay penalty applies.
+        if self.released or self.status == "released":
+            self.state = self._compute_state()
+            self.mood = self._compute_mood()
+            from tools.time_tool import get_current_time
+            snapshot = StateSnapshot(
+                timestamp=get_current_time(),
+                state=self.state.value,
+                hunger=self.hunger,
+                energy=self.energy,
+                happiness=self.happiness,
+                mood=self.mood,
+            )
+            self.state_history.append(snapshot)
+            if len(self.state_history) > 50:
+                self.state_history = self.state_history[-50:]
+            return None  # a free creature sends no need-nagging
+
         # ── Lens #73: Track consecutive ticks without player interaction ──
         self.ticks_without_interaction += 1
 
@@ -818,37 +845,39 @@ class CreatureAgent:
 
     # -- I12: Release --
 
-    def release(self) -> AgentMessage:
-        """Release the creature into the wild.
+    def release(self, final_words: str = "") -> AgentMessage:
+        """Release the creature into the wild — liberation, not death.
 
-        Only creatures at evolution_stage >= 2 can be released.
-        The creature becomes wild — removed from the player's active terra
-        but lives on as a wild creature visible on the global map.
+        Release is the win condition ("Встреча, а не коллекция"): the
+        creature is freed (status → 'released'), its needs are FROZEN —
+        hunger/energy/happiness stop decaying, the burden of care is
+        lifted — and the player's goodbye is kept in final_words.
+
+        The creature is not killed or saddened: it leaves alive and free.
+        Releasing twice is a no-op (the first goodbye is kept).
         """
-        if self.evolution_stage < 2:
-            return self._make_message(
-                "Not ready yet. This creature has not fully matured. "
-                "Evolve it to stage 2 first.",
-                "response", 2
-            )
-        if self.released:
+        if self.released or self.status == "released":
             return self._make_message(
                 "This creature has already been released into the wild.",
                 "response", 2
             )
         self.released = True
+        self.status = "released"
         self.release_timestamp = time.time()
+        from tools.time_tool import get_current_time
+        self.released_at = get_current_time()
+        self.final_words = final_words
 
         self._record_milestone(
-            f"★ Released into the wild at stage {self.evolution_stage}! "
-            f"Journey phase: {self.journey_phase}"
+            f"★ Released into the wild! Journey phase: {self.journey_phase}"
         )
 
+        farewell = f" {final_words}" if final_words else ""
         return self._make_message(
             f"It looks at you one last time — a long, knowing look. "
             f"Then it turns and walks into the terra, becoming part of "
-            f"the wild. Free.\n\n"
-            f"'★ Wild Tamer' badge unlocked.",
+            f"the wild. Free.{farewell}\n\n"
+            f"'★ Встретивший' — the terra remembers you both.",
             "response", 10
         )
 

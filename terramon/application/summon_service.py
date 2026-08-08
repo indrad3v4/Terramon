@@ -17,6 +17,7 @@ import logging
 import time
 from collections.abc import Callable
 
+from terramon.adapters.reverse_geo import reverse_geocode
 from terramon.application.intent_router import IntentRouter
 from terramon.application.payment_gate import PaymentGate
 from terramon.application.insight_engine import extract_insight
@@ -192,7 +193,29 @@ class SummonService:
         c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
         return R * c
 
-    def summon(self, raw_input: str, rare_boost: float = 0.0) -> ThoughtSeed:
+    def _resolve_geo(self, geo) -> tuple[float, float, str]:
+        """Extract (lat, lon, place_name) from an optional GeoContext.
+
+        G03: when the capture path supplied raw coordinates without a place
+        name, reverse-geocode them via Nominatim (disk-cached, 30 days).
+        Best-effort by design: any failure degrades to "lat, lon" text and
+        NEVER crashes the summon. The resolved name is written back onto the
+        GeoContext so insight.geo stays consistent with the seed.
+        """
+        if geo is None:
+            return 0.0, 0.0, ""
+        lat, lon = float(geo.lat), float(geo.lon)
+        place_name = geo.place_name or ""
+        if not place_name:
+            try:
+                place_name = reverse_geocode(lat, lon)
+            except Exception:
+                log.exception("Reverse geocoding failed for (%s, %s)", lat, lon)
+                place_name = f"{lat:.4f}, {lon:.4f}"
+            geo.place_name = place_name
+        return lat, lon, place_name
+
+    def summon(self, raw_input: str, rare_boost: float = 0.0, geo=None) -> ThoughtSeed:
         """Route input to an agent, persist memory, and emit a signal.
 
         Raises RuntimeError if rate limit exceeded or input is too long.
@@ -201,6 +224,9 @@ class SummonService:
             raw_input: The thought text to summon from.
             rare_boost: Additional probability mass shifted to the rare tier
                 (e.g. 0.05 from streak bonus).
+            geo: Optional GeoContext anchoring the creature to a real place
+                (capture path). When it has coordinates but no place name,
+                the place is reverse-geocoded best-effort.
         """
         self._check_rate_limit()
         if len(raw_input) > MAX_INPUT_LENGTH:
@@ -208,7 +234,7 @@ class SummonService:
         agent_name = self.router.route(raw_input)
         rarity = self.rarity_classifier(raw_input, rare_boost=rare_boost)
 
-        insight = extract_insight(raw_input)
+        insight = extract_insight(raw_input, geo=geo)
 
         # P1 T07: uniqueness-based pricing — MINT cost = f(embedding scarcity)
         base_price = rarity.price_sats
@@ -229,6 +255,9 @@ class SummonService:
             # Real UI would block until settle(); here we record the intent.
             paid = False
 
+        # G03: anchor the creature to its birthplace (reverse-geocode if needed)
+        lat, lon, place_name = self._resolve_geo(geo)
+
         seed = ThoughtSeed.make(
             raw_input=raw_input,
             summoned_agent=agent_name,
@@ -238,6 +267,10 @@ class SummonService:
             paid=paid,
             # FIX 2: the agent is driven by the INSIGHT, not by the rarity label.
             insight=insight,
+            # G03: geographic anchor — where on Earth this thought was born.
+            lat=lat,
+            lon=lon,
+            place_name=place_name,
             # I03: First summon for this agent gets birth_embedding snapshot
             birth_embedding=self._resolve_birth_embedding(agent_name, insight),
         )
@@ -258,7 +291,7 @@ class SummonService:
 
         return seed
 
-    def summon_paid(self, raw_input: str, proof: str) -> ThoughtSeed:
+    def summon_paid(self, raw_input: str, proof: str, geo=None) -> ThoughtSeed:
         """Rare summon flow: require + verify payment before releasing."""
         self._check_rate_limit()
         if len(raw_input) > MAX_INPUT_LENGTH:
@@ -268,7 +301,7 @@ class SummonService:
 
         # P1 T07: extract insight early (for embedding) so uniqueness bonus
         # can be computed for the payment amount.
-        insight = extract_insight(raw_input)
+        insight = extract_insight(raw_input, geo=geo)
 
         base_price = rarity.price_sats
         if insight and insight.embedding is not None:
@@ -288,6 +321,9 @@ class SummonService:
         if not self.gate.settle(request, proof):
             raise RuntimeError("Payment not verified — creature stays sealed")
 
+        # G03: anchor the creature to its birthplace (reverse-geocode if needed)
+        lat, lon, place_name = self._resolve_geo(geo)
+
         seed = ThoughtSeed.make(
             raw_input=raw_input,
             summoned_agent=agent_name,
@@ -297,6 +333,10 @@ class SummonService:
             paid=True,
             # FIX 2: rare summons also carry an insight.
             insight=insight,
+            # G03: geographic anchor — where on Earth this thought was born.
+            lat=lat,
+            lon=lon,
+            place_name=place_name,
             # I03: First summon for this agent gets birth_embedding snapshot
             birth_embedding=self._resolve_birth_embedding(agent_name, insight),
         )

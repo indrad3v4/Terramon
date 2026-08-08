@@ -34,6 +34,17 @@ class GeoContext:
     lon: float = 0.0
     place_name: str = ""  # e.g. "Kraków, Poland" — reverse geocoded later
 
+    @classmethod
+    def unknown(cls) -> "GeoContext":
+        """Explicit 'no geo' context — the denied-capture path.
+
+        G03: when the player refuses photo capture (or the TMA has no
+        permission), summon still runs but the creature is born unanchored:
+        lat/lon 0.0 and no place name. Keeping this explicit makes the
+        denial visible in the pipeline instead of an implicit default.
+        """
+        return cls(lat=0.0, lon=0.0, place_name="")
+
 
 @dataclass
 class Insight:

@@ -54,7 +54,7 @@ def render_reveal(
         f"    Collection: {progress.distinct_count}/{progress.goal_distinct} distinct",
     ]
     if progress.goal_reached:
-        tier_name = progress.last_reached_tier_name or "Tamer"
+        tier_name = progress.last_reached_tier_name or "Встретивший"
         lines.append(_c(f"    ✸ GOAL REACHED — you are a {tier_name}! ✸", Rarity.LEGENDARY, color))
         next_name = progress.next_tier_name
         if next_name:

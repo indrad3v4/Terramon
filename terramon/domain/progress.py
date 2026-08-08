@@ -46,11 +46,12 @@ XP_BY_RARITY = {
 XP_PER_LEVEL = 100
 
 # LENS #17: Progressive goal tiers — infinite horizon.
-# Tamer (5) → Master (12) → Legend (36 = 12×3 continents).
+# Win reframe ("Встреча, а не коллекция"): the first tier is a MEETING,
+# not a taming — Встретивший (5) → Master (12) → Legend (36 = 12×3 continents).
 # Each tier unlocks a new game feature.
 # Post-goal shows next tier requirements, not a dead end.
 GOAL_TIERS = [
-    {"name": "Tamer",  "distinct": 5,  "badge": "★",   "unlock": "Scout"},
+    {"name": "Встретивший", "distinct": 5, "badge": "★", "unlock": "Scout"},
     {"name": "Master", "distinct": 12, "badge": "★★",  "unlock": "Map"},
     {"name": "Legend", "distinct": 36, "badge": "★★★", "unlock": "Squad"},
 ]
@@ -176,7 +177,7 @@ class PlayerProgress:
     """Mutable player state the loop advances each turn.
 
     LENS #17: Progressive goal tiers — infinite horizon.
-    Tamer (5) → Master (12) → Legend (36). Each tier unlocks a feature.
+    Встретивший (5) → Master (12) → Legend (36). Each tier unlocks a feature.
     After reaching one tier, the player pushes toward the next.
     Post-goal shows next tier requirements, not a dead end.
 
@@ -187,7 +188,7 @@ class PlayerProgress:
 
     xp: int = 0
     collection: set[str] = field(default_factory=set)
-    goal_distinct: int = 5  # default — matches first tier (Tamer)
+    goal_distinct: int = 5  # default — matches first tier (Встретивший)
     goal_tier_index: int = 0  # LENS #17: current tier index in GOAL_TIERS
     journey_phase: str = "call"  # LENS #68: call | threshold | transformation | return
     # Last reached tier info (for celebration display — cleared on dismiss)
@@ -198,6 +199,11 @@ class PlayerProgress:
     # I09: Summon streak counter — tracks consecutive daily summons
     summon_streak: int = 0
     last_summon_date: str = ""  # "YYYY-MM-DD" format
+
+    # I12: Released archetypes — the NEW win counter ("Встреча, а не
+    # коллекция"). Progress fills on RELEASE, not on summon. The legacy
+    # `collection`/`distinct_count` is kept for backward compatibility.
+    released_archetypes: set[str] = field(default_factory=set)
 
     @property
     def level(self) -> int:
@@ -211,7 +217,26 @@ class PlayerProgress:
 
     @property
     def distinct_count(self) -> int:
+        """Legacy win counter: distinct archetypes SUMMONED."""
         return len(self.collection)
+
+    @property
+    def released_distinct_count(self) -> int:
+        """Win counter (reframed): distinct archetypes RELEASED into the wild.
+
+        The slot fills on release — a creature is met, cared for, and set
+        free ("Встреча, а не коллекция"). This is what the TMA reads for
+        the Встретивший tier; distinct_count remains for legacy consumers.
+        """
+        return len(self.released_archetypes)
+
+    def released_count(self) -> int:
+        """Alias helper for released_distinct_count."""
+        return self.released_distinct_count
+
+    def record_release(self, archetype: str) -> None:
+        """Record a released creature's archetype (distinct set)."""
+        self.released_archetypes.add(archetype)
 
     @property
     def current_tier_name(self) -> str:
