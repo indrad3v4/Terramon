@@ -44,6 +44,26 @@ RARITY_PRICE = {
 }
 RARITY_PRICE_SATS = RARITY_PRICE  # alias for backward compat
 
+# Lightning (BTC) mint minimum — the Alby Hub node's JIT channel opens at
+# >= 2501 sats; smaller invoices fail with LiquidityRequestFailed. Lightning
+# is the "sacred rail" (ritual payment), so it's priced above the Stars rail.
+# 3000 sats keeps a margin over the JIT floor (~$0.30, still a "coin in the
+# fountain" price).
+LIGHTNING_MIN_MINT_SATS = 3000
+
+
+def lightning_mint_price(stars_price: int) -> int:
+    """Map a Stars-tier price to the Lightning mint price in sats.
+
+    Free tiers stay free; paid tiers are lifted to at least
+    LIGHTNING_MIN_MINT_SATS so the Alby node can actually open a JIT
+    channel and settle the invoice (verified: 3000 sats creates a BOLT11
+    instantly on the live hub, 500 does not).
+    """
+    if stars_price <= 0:
+        return 0
+    return max(int(stars_price), LIGHTNING_MIN_MINT_SATS)
+
 # Dirichlet prior — base probability vector BEFORE seeing thought content.
 # [common, uncommon, rare, legendary] — the "default odds" of any summon.
 # The thought's rarity-score shifts probability mass toward rarer tiers.

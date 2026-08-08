@@ -234,6 +234,7 @@ class TerramonState(rx.State):
     unlocked: bool = False  # becomes True after payment/unlock
     # Lightning (BTC-first): current BOLT11 invoice + its hub id
     lightning_invoice: str = ""      # BOLT11 string shown to player
+    lightning_price: int = 0         # actual sats price (>= LIGHTNING_MIN_MINT_SATS)
     lightning_ref: str = ""          # hub invoice id for verification
     lightning_checking: bool = False  # in-flight verify flag
 
@@ -1373,7 +1374,12 @@ class TerramonState(rx.State):
         if not _ALBY.url or not _ALBY.api_key:
             self.agent_message = "⚡ Lightning not configured yet — use Stars for now."
             return
-        price = self.price_sats if self.price_sats > 0 else 1
+        from terramon.domain.rarity import lightning_mint_price
+        price = lightning_mint_price(int(self.price_sats))
+        if price <= 0:
+            self.agent_message = "⚡ This creature is free — no mint needed."
+            return
+        self.lightning_price = price
         try:
             req = _ALBY.create_payment(price, f"Terramon summon · {self.thought[:40]}")
             self.lightning_invoice = req.destination
@@ -2109,6 +2115,69 @@ def creature_care_panel() -> rx.Component:
                     ),
                     spacing="2",
                 ),
+                # G04: birthplace map + TERRA vision (moved from dead creature_card()
+                # — creature_card was never called in index(); Reflex tree-shook it,
+                # so the map, 'Open your eyes' button and home_lore vanished from the
+                # production bundle. This block belongs to the LIVE panel.)
+                rx.cond(
+                    TerramonState.static_map_url != "",
+                    rx.box(
+                        rx.image(
+                            src=TerramonState.static_map_url,
+                            width="100%",
+                            height="auto",
+                            border_radius="8px",
+                            border="1px solid #27272a",
+                        ),
+                        rx.cond(
+                            TerramonState.place != "",
+                            rx.text(TerramonState.place, font_size="0.65em",
+                                    color="#6b7280", text_align="center", margin_top="0.3em"),
+                            rx.fragment(),
+                        ),
+                        # TERRA vision: creature opens its eyes on its birthplace
+                        rx.cond(
+                            TerramonState.home_lore != "",
+                            rx.text(
+                                TerramonState.home_lore,
+                                font_size="0.7em",
+                                color="#d4d4d8",
+                                font_style="italic",
+                                text_align="center",
+                                margin_top="0.3em",
+                                padding="0.4em 0.6em",
+                                background="rgba(255,255,255,0.04)",
+                                border_radius="6px",
+                                border="1px solid #27272a",
+                            ),
+                            rx.cond(
+                                TerramonState.home_lore_loading,
+                                rx.text("👁 the creature opens its eyes...",
+                                        font_size="0.7em", color="#f59e0b",
+                                        font_style="italic", text_align="center",
+                                        margin_top="0.3em"),
+                                rx.button(
+                                    "👁 Open your eyes",
+                                    on_click=TerramonState.see_birthplace,
+                                    size="1", variant="ghost", color_scheme="gray",
+                                    font_size="0.65em", margin_top="0.3em",
+                                ),
+                            ),
+                        ),
+                        width="100%",
+                    ),
+                    rx.cond(
+                        TerramonState.place != "",
+                        rx.hstack(
+                            rx.text("📍", font_size="0.8em"),
+                            rx.text(TerramonState.place, font_size="0.75em",
+                                    color="#6b7280", font_style="italic"),
+                            spacing="1",
+                            align="center",
+                        ),
+                        rx.fragment(),
+                    ),
+                ),
                 # Phase 19: Creature state + mood + day/night indicator
                 rx.hstack(
                     rx.cond(
@@ -2713,7 +2782,7 @@ def payment_gate() -> rx.Component:
                     border_radius="8px", background="#fff", padding="4px",
                 ),
                 rx.text(
-                    "Pay ⚡ " + TerramonState.price_sats.to_string() + " sats with any Lightning wallet",
+                    "Pay ⚡ " + TerramonState.lightning_price.to_string() + " sats with any Lightning wallet",
                     font_size="0.75em", color="#fbbf24", text_align="center",
                 ),
                 rx.text(
