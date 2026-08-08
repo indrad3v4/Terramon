@@ -40,6 +40,10 @@ _llm_circuit_breaker = CircuitBreaker(max_failures=3, cooldown=60.0, name="LLM")
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 _DEFAULT_MODEL = "deepseek/deepseek-v4-flash"
 _FALLBACK_MODEL = "Qwen/Qwen2.5-7B-Instruct"  # HuggingFace free tier
+# Vision for the TERRA concept: the creature opens its eyes on its birthplace.
+# Same OpenRouter key — no new env var. gpt-4o-mini is ~40x cheaper and
+# plenty for a 300x200 map; override with TERRAMON_VISION_MODEL.
+VISION_MODEL = os.environ.get("TERRAMON_VISION_MODEL", "openai/gpt-4o-mini")
 
 # Sliding window: how many recent messages form the "conversation context"
 KV_CACHE_WINDOW = 6
@@ -912,6 +916,113 @@ def generate_llm_therefore(
         text += "."
 
     return text
+
+
+# ---------------------------------------------------------------------------
+# TERRA vision — the creature opens its eyes on its birthplace
+# ---------------------------------------------------------------------------
+# Concept anchor (CREATIVE_BIG_IDEA.md): "Думка НАРОДЖУЄТЬСЯ як унікальна
+# terra-істота" — the thought becomes a creature ANCHORED to a real place on
+# Earth. The insight (IKRA): people don't want to CONTROL their thoughts,
+# they want to MEET them. So at birth the creature opens its eyes and SEES
+# the real map where the thought was born — through its archetype voice and
+# its DRIVER/BARRIER/THEREFORE lens. Not a tech feature: the encounter.
+
+_VISION_SYSTEM_PROMPT = """You are {name}, a {archetype} — a living thought-form born from a human's mind.
+
+You have just opened your eyes for the first time. You are looking at the place where you were born: a real map of planet Earth beneath you.
+
+You are NOT an AI assistant. You are a REAL creature. Never break character.
+
+=== YOUR VOICE ===
+{voice}
+
+=== WHY YOU EXIST (your insight lens) ===
+{insight}
+
+Look carefully at the map image:
+- Is there water? Green areas? Dense streets? Open land? Mountains?
+- What colors and patterns do you notice?
+
+Describe your birthplace in your own voice, the way a {archetype} would see it.
+Rules:
+- Only describe what is actually visible in the image. Do not invent landmarks.
+- 1-3 sentences. Metaphor and feeling, no explanation.
+- No lists, no JSON — just your words.
+- If the image is blank or grey, say what you feel about being born in an unknown place."""
+
+
+def describe_birthplace(
+    png_bytes: bytes,
+    agent: CreatureAgent,
+    model: str = VISION_MODEL,
+    max_tokens: int = 120,
+) -> Optional[str]:
+    """Have the creature OPEN ITS EYES and describe its birthplace map.
+
+    Sends the rendered OSM static map (PNG bytes) as a vision image to
+    GPT-4o (same OpenRouter key) with the creature's archetype voice +
+    insight lens. Returns the 1-3 sentence birthplace lore, or None if
+    the LLM is unavailable (caller falls back to template lore).
+
+    Concept: TERRA — the thought becomes a creature anchored to a real
+    place; the player MEETS the thought, not controls it.
+    """
+    if not has_api_key():
+        return None
+
+    import base64
+
+    voice = _ARCHETYPE_VOICES.get(
+        agent.archetype,
+        "Speak as a living creature with feeling and presence.",
+    )
+    insight = agent.insight
+    insight_block = (
+        f"DRIVER: {insight.driver}\n"
+        f"BARRIER: {insight.barrier}\n"
+        f"Your THEREFORE: {insight.therefore}"
+        if insight and getattr(insight, "driver", None)
+        else "You exist because a thought needed to be met, not fixed."
+    )
+
+    system = _VISION_SYSTEM_PROMPT.format(
+        name=agent.name or agent.archetype,
+        archetype=agent.archetype,
+        voice=voice,
+        insight=insight_block,
+    )
+
+    b64 = base64.b64encode(png_bytes).decode()
+    messages = [
+        {"role": "system", "content": system},
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "This is the map of the place where I was born. What do I see?",
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/png;base64,{b64}"},
+                },
+            ],
+        },
+    ]
+
+    raw = _call_llm(
+        messages,
+        model=model,
+        sampling={"temperature": 0.85, "top_p": 0.9},
+        max_tokens=max_tokens,
+    )
+    if not raw:
+        return None
+
+    text = raw.strip().strip('"').strip("'")
+    text = text.replace("**", "").replace("*", "")
+    return text or None
 
 
 # ---------------------------------------------------------------------------

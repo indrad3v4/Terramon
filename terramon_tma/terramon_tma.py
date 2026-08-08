@@ -46,6 +46,10 @@ from pathlib import Path
 from terramon.adapters.embedding_classifier import EmbeddingClassifier
 from terramon.adapters.alby_hub_adapter import AlbyHubAdapter
 from terramon.adapters.json_memory import JsonMemory
+from terramon.adapters.static_map import (
+    render_static_map,
+    static_map_endpoint_path,
+)
 from terramon.application.game_loop import GameLoop, TurnResult
 from terramon.application.geo_tournament import GeoTournamentService
 from terramon.application.summon_service import SummonService
@@ -248,6 +252,11 @@ class TerramonState(rx.State):
     agent_lat: float = 0.0
     agent_lon: float = 0.0
 
+    # TERRA vision: the creature's own words about its birthplace
+    # (generated lazily via see_birthplace, cached in this field)
+    home_lore: str = ""
+    home_lore_loading: bool = False
+
     # The player's terra: every creature that ever lived (persisted).
     terra: list[dict] = []
 
@@ -303,16 +312,16 @@ class TerramonState(rx.State):
 
     @rx.var
     def static_map_url(self) -> str:
-        """G04: static map URL for birthplace, or empty if no coords.
+        """G04: birthplace thumbnail via self-hosted OSM static map renderer.
 
-        staticmap.openstreetmap.de was shut down by OSM (DNS dead since 2024) —
-        swapped to Yandex Static Maps (free, no key, live). NOTE: Yandex uses
-        ll=LON,LAT (longitude FIRST).
+        staticmap.openstreetmap.de was shut down by OSM (DNS dead since 2024)
+        and the Yandex Static Maps hotfix is removed (RU service + external API).
+        We now stitch OSM tiles server-side (terramon/adapters/static_map.py)
+        and serve them from /static-map — one OSM source for the whole game.
         """
         if self.agent_lat != 0.0 or self.agent_lon != 0.0:
-            return (
-                f"https://static-maps.yandex.ru/1.x/?"
-                f"ll={self.agent_lon},{self.agent_lat}&z=14&size=300,200&l=map"
+            return static_map_endpoint_path(
+                self.agent_lat, self.agent_lon, zoom=14, width=300, height=200
             )
         return ""
 
@@ -396,6 +405,8 @@ class TerramonState(rx.State):
             self.place = ""
             self.agent_lat = 0.0
             self.agent_lon = 0.0
+            self.home_lore = ""
+            self.home_lore_loading = False
             if seeds and seeds[-1].insight and seeds[-1].insight.geo:
                 g = seeds[-1].insight.geo
                 self.agent_lat = g.lat
@@ -581,6 +592,54 @@ class TerramonState(rx.State):
             except Exception as _e:
                 log.debug("Portrait generation skipped: %s", _e)
         threading.Thread(target=_gen_portrait, daemon=True).start()
+
+    @rx.event
+    def see_birthplace(self):
+        """TERRA vision: the creature opens its eyes on its birthplace.
+
+        Renders the OSM static map of the birth coordinates, sends it as a
+        vision image to GPT-4o (same OpenRouter key, no new env var) with
+        the creature's archetype voice + insight lens, and stores the
+        1-3 sentence lore in home_lore. Silent fail: any error leaves
+        home_lore empty and the UI keeps the plain map + place name.
+        """
+        if not self.agent_lat and not self.agent_lon:
+            return
+        if self.home_lore or self.home_lore_loading:
+            return
+        self.home_lore_loading = True
+        try:
+            from terramon.adapters.static_map import render_static_map
+            from terramon.application.llm_behavior import describe_birthplace
+            from terramon.domain.creature_agent import CreatureAgent
+            from terramon.domain.insight import Insight
+
+            png = render_static_map(
+                self.agent_lat, self.agent_lon, zoom=14, width=300, height=200
+            )
+            # Last insight for this creature (DRIVER/BARRIER/THEREFORE lens)
+            insight = None
+            try:
+                seeds = _MEMORY.load_all_seeds()
+                if seeds and seeds[-1].insight:
+                    insight = seeds[-1].insight
+            except Exception:
+                pass
+            agent = CreatureAgent(
+                agent_id="birthplace",
+                archetype=self.agent,
+                place_name=self.place,
+                insight=insight or Insight(
+                    driver="", barrier="", therefore="", archetype=self.agent
+                ),
+            )
+            lore = describe_birthplace(png, agent)
+            if lore:
+                self.home_lore = lore
+        except Exception as e:
+            log.warning("see_birthplace failed (silent): %s", e)
+        finally:
+            self.home_lore_loading = False
 
     @rx.event
     def load_terra(self):
@@ -1387,7 +1446,7 @@ def terra_card(item: dict) -> rx.Component:
             rx.cond(
                 (item["lat"] != None) & (item["lon"] != None),
                 rx.image(
-                    src=f"https://static-maps.yandex.ru/1.x/?ll={item['lon']},{item['lat']}&z=14&size=280,160&l=map",
+                    src=static_map_endpoint_path(item["lat"], item["lon"], zoom=14, width=280, height=160),
                     width="100%",
                     height="auto",
                     border_radius="6px",
@@ -1669,6 +1728,35 @@ def creature_card() -> rx.Component:
                         rx.text(TerramonState.place, font_size="0.65em",
                                 color="#6b7280", text_align="center", margin_top="0.3em"),
                         rx.fragment(),
+                    ),
+                    # TERRA vision: creature opens its eyes on its birthplace
+                    rx.cond(
+                        TerramonState.home_lore != "",
+                        rx.text(
+                            TerramonState.home_lore,
+                            font_size="0.7em",
+                            color="#d4d4d8",
+                            font_style="italic",
+                            text_align="center",
+                            margin_top="0.3em",
+                            padding="0.4em 0.6em",
+                            background="rgba(255,255,255,0.04)",
+                            border_radius="6px",
+                            border="1px solid #27272a",
+                        ),
+                        rx.cond(
+                            TerramonState.home_lore_loading,
+                            rx.text("👁 the creature opens its eyes...",
+                                    font_size="0.7em", color="#f59e0b",
+                                    font_style="italic", text_align="center",
+                                    margin_top="0.3em"),
+                            rx.button(
+                                "👁 Open your eyes",
+                                on_click=TerramonState.see_birthplace,
+                                size="1", variant="ghost", color_scheme="gray",
+                                font_size="0.65em", margin_top="0.3em",
+                            ),
+                        ),
                     ),
                     width="100%",
                 ),
@@ -3073,6 +3161,39 @@ def health(request):
     from starlette.responses import JSONResponse
     return JSONResponse({"status": "ok", "tests": 84})
 
+
+def static_map(request):
+    """G04: self-hosted OSM static map (replaces Yandex Static Maps).
+
+    Query params: lat, lon, zoom (default 14), w, h (default 300x200).
+    Returns a PNG stitched from OSM tiles with a marker at the point.
+    """
+    from starlette.responses import Response
+
+    try:
+        lat = float(request.query_params.get("lat", "0"))
+        lon = float(request.query_params.get("lon", "0"))
+        zoom = int(request.query_params.get("zoom", "14"))
+        w = int(request.query_params.get("w", "300"))
+        h = int(request.query_params.get("h", "200"))
+    except ValueError:
+        return Response(status_code=400, content=b"bad params")
+
+    if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+        return Response(status_code=400, content=b"coords out of range")
+
+    try:
+        png = render_static_map(lat, lon, zoom=zoom, width=w, height=h)
+    except Exception as exc:
+        return Response(status_code=500, content=str(exc).encode())
+    return Response(
+        content=png,
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=604800"},
+    )
+
+
 # Register the health endpoint on the underlying Starlette app
 app._api.add_route("/health", health, methods=["GET"])
+app._api.add_route("/static-map", static_map, methods=["GET"])
 
