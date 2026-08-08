@@ -70,9 +70,12 @@ COPY --from=builder /app /app
 # Also pre-create stateful_pages.json so Reflex doesn't try to create it at runtime
 # REFLEX_DIR (/app/.local/share/reflex) must exist + be writable: non-root reflex
 # writes logs/config there on startup (verified via platformdirs resolution).
-RUN mkdir -p /app/data /app/.web/backend /app/.local/share/reflex && \
+# reflex.lock/ is created by the build stage as root; the runtime user must own it
+# because `reflex run` syncs the canonical bun.lock there on every start
+# (reflex-dev/reflex #6475 — lockfile moved under reflex.lock/).
+RUN mkdir -p /app/data /app/.web/backend /app/.local/share/reflex /app/reflex.lock && \
     touch /app/.web/backend/stateful_pages.json && \
-    chown -R terramon:terramon /app/data /app/.web/backend/stateful_pages.json /app/.web /app/.local/share/reflex
+    chown -R terramon:terramon /app/data /app/.web/backend/stateful_pages.json /app/.web /app/.local/share/reflex /app/reflex.lock
 
 # Switch to non-root user
 USER terramon
