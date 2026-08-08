@@ -445,12 +445,29 @@ class TerramonState(rx.State):
             self.summoning = False
             return
         self.summoning = True
-        # G05: FIRST summon — capture location first so the creature is born
-        # anchored to a real place. Denied/timeout → geo=None → the creature
-        # is born "в неизвестном месте" (0,0 is a valid state, not a blocker).
+        # G05: FIRST summon — capture location so the creature is born
+        # anchored to a real place. Inline JS literal (not the module
+        # constant) — same mechanism as the proven HapticFeedback call:
+        # Reflex serializes the literal into the event payload reliably.
         if self.summon_count == 0 and self.geo_status == "":
             try:
-                coords = yield rx.call_script(_LOCATION_JS)
+                coords = yield rx.call_script(
+                    "(async () => {"
+                    "const tg = window.Telegram?.WebApp;"
+                    "if (tg && tg.LocationButton){"
+                    "tg.LocationButton.show();"
+                    "return await new Promise((resolve)=>{"
+                    "const t=setTimeout(()=>{tg.LocationButton.hide();resolve(null);},60000);"
+                    "tg.onEvent('location_accessed',(loc)=>{"
+                    "clearTimeout(t);tg.LocationButton.hide();"
+                    "resolve({lat:loc.latitude,lon:loc.longitude});});});}"
+                    "return await new Promise((resolve)=>{"
+                    "if(!navigator.geolocation)return resolve(null);"
+                    "navigator.geolocation.getCurrentPosition("
+                    "(pos)=>resolve({lat:pos.coords.latitude,lon:pos.coords.longitude}),"
+                    "()=>resolve(null),{timeout:10000,maximumAge:300000});});"
+                    "})()"
+                )
             except Exception:
                 coords = None
             self._apply_coords(coords)
