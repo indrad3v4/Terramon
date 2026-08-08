@@ -44,6 +44,7 @@ import reflex as rx
 from pathlib import Path
 
 from terramon.adapters.embedding_classifier import EmbeddingClassifier
+from terramon.adapters.alby_hub_adapter import AlbyHubAdapter
 from terramon.adapters.json_memory import JsonMemory
 from terramon.application.game_loop import GameLoop, TurnResult
 from terramon.application.geo_tournament import GeoTournamentService
@@ -87,6 +88,11 @@ _SERVICE = SummonService(
 _TOURNAMENT_SVC = GeoTournamentService()
 _LOOP = GameLoop(_SERVICE, PlayerProgress(goal_distinct=5),
                  tournament_service=_TOURNAMENT_SVC)
+
+# Lightning payments — self-custodial Alby Hub node (Railway).
+# Reads ALBY_HUB_URL / ALBY_HUB_API_KEY from env; if unset, adapter stays
+# unconfigured and the Stars fallback gate is shown instead (BTC-first UI).
+_ALBY = AlbyHubAdapter()
 
 # Agent service for creature interaction (Tamagotchi×Pokemon)
 _AGENT_SVC = AgentService(_MEMORY)
@@ -183,6 +189,10 @@ class TerramonState(rx.State):
     # F3 — Monetization Gate: first summon free, then payment required
     summon_count: int = 0
     unlocked: bool = False  # becomes True after payment/unlock
+    # Lightning (BTC-first): current BOLT11 invoice + its hub id
+    lightning_invoice: str = ""      # BOLT11 string shown to player
+    lightning_ref: str = ""          # hub invoice id for verification
+    lightning_checking: bool = False  # in-flight verify flag
 
     # Tamagotchi×Pokemon: creature agent interaction
     selected_agent_id: str = ""
@@ -1076,6 +1086,53 @@ class TerramonState(rx.State):
         return rx.call_script(
             f"if(window.Telegram?.WebApp?.openInvoice)Telegram.WebApp.openInvoice('{_stars_url}');"
         )
+
+    @rx.event
+    def pay_lightning(self):
+        """BTC-first: create a BOLT11 invoice on the self-custodial Alby Hub node.
+        Player pays with any Lightning wallet; sats settle straight to the node."""
+        if not _ALBY.url or not _ALBY.api_key:
+            self.agent_message = "⚡ Lightning not configured yet — use Stars for now."
+            return
+        price = self.price_sats if self.price_sats > 0 else 1
+        try:
+            req = _ALBY.create_payment(price, f"Terramon summon · {self.thought[:40]}")
+            self.lightning_invoice = req.destination
+            self.lightning_ref = req.verification_ref
+            self.lightning_checking = False
+            self.agent_message = f"⚡ Invoice ready: {price} sats. Pay with any Lightning wallet."
+        except Exception as e:
+            log.error(f"pay_lightning failed: {e}", exc_info=True)
+            self.agent_message = f"⚡ Invoice failed: {getattr(e, 'message', e)}"
+
+    @rx.event
+    def verify_lightning(self):
+        """Check whether the BOLT11 invoice was settled on the hub; unlock on success."""
+        if not self.lightning_ref or not _ALBY.url:
+            self.agent_message = "⚡ Create an invoice first (Pay with Lightning)."
+            return
+        self.lightning_checking = True
+        try:
+            from terramon.ports.payment_port import PaymentRequest, PaymentMethod
+            req = PaymentRequest(
+                id=self.lightning_ref,
+                method=PaymentMethod.LIGHTNING,
+                amount_sats=self.price_sats,
+                destination=self.lightning_invoice,
+                memo="terramon",
+                verification_ref=self.lightning_ref,
+            )
+            if _ALBY.verify_payment(req):
+                self.unlocked = True
+                self.lightning_checking = False
+                self.agent_message = "✅ Payment received! Your thought is free to summon."
+            else:
+                self.lightning_checking = False
+                self.agent_message = "⏳ Not settled yet — waiting for the payment to confirm."
+        except Exception as e:
+            log.error(f"verify_lightning failed: {e}", exc_info=True)
+            self.lightning_checking = False
+            self.agent_message = f"⚡ Verify failed: {getattr(e, 'message', e)}"
 
     @rx.event
     def share_creature(self):
@@ -2278,16 +2335,16 @@ def earth_map() -> rx.Component:
 
 
 def payment_gate() -> rx.Component:
-    """F3 — Monetization Gate: Telegram Stars payment (1 Star per summon).
-    Shown inline when free summon is used and payment hasn't been made.
-    Uses Telegram.WebApp.openInvoice for Stars payment flow."""
+    """F3 — Monetization Gate: first summon free, then payment required.
+    BTC-first: Lightning (BOLT11 on self-custodial Alby Hub) is primary;
+    Telegram Stars is the fallback. In-flight disable via lightning_checking."""
     return rx.vstack(
         rx.box(
             rx.vstack(
-                rx.text("⭐", font_size="1.5em"),
+                rx.text("⚡", font_size="1.5em"),
                 rx.text("Free summon used!",
                         font_weight="bold", font_size="0.9em", color="#e5e7eb"),
-                rx.text("Spend 1 Telegram Star to summon again.",
+                rx.text("Pay in bitcoin (Lightning) to summon again.",
                         font_size="0.75em", color="#9ca3af", text_align="center"),
                 spacing="1",
                 align="center",
@@ -2298,6 +2355,62 @@ def payment_gate() -> rx.Component:
             border_radius="12px",
             width="100%",
         ),
+        # BTC-first: Lightning invoice flow
+        rx.cond(
+            TerramonState.lightning_invoice != "",
+            rx.vstack(
+                rx.image(
+                    src="https://api.qrserver.com/v1/create-qr-code/?size=180x180&data="
+                        + TerramonState.lightning_invoice,
+                    width="180px", height="180px",
+                    border_radius="8px", background="#fff", padding="4px",
+                ),
+                rx.text(
+                    "Pay ⚡ " + TerramonState.price_sats.to_string() + " sats with any Lightning wallet",
+                    font_size="0.75em", color="#fbbf24", text_align="center",
+                ),
+                rx.text(
+                    TerramonState.lightning_invoice,
+                    font_size="0.55em", color="#6b7280", text_align="center",
+                    max_width="280px", word_break="break-all",
+                ),
+                rx.cond(
+                    TerramonState.lightning_checking,
+                    rx.text("⏳ Checking payment…", font_size="0.7em", color="#9ca3af"),
+                    rx.button(
+                        "✅ I've paid — verify",
+                        on_click=TerramonState.verify_lightning,
+                        variant="solid", size="2", color_scheme="yellow",
+                        width="100%", _hover={"transform": "scale(1.02)"},
+                    ),
+                ),
+                rx.button(
+                    "🔄 New invoice",
+                    on_click=TerramonState.pay_lightning,
+                    variant="surface", size="1", color_scheme="gray",
+                    width="100%",
+                ),
+                spacing="2",
+                align="center",
+                width="100%",
+            ),
+            rx.button(
+                rx.hstack(
+                    rx.text("⚡", font_size="1em"),
+                    rx.text("Pay with Lightning · " + TerramonState.price_sats.to_string() + " sats",
+                            font_size="0.8em"),
+                    spacing="1",
+                ),
+                on_click=TerramonState.pay_lightning,
+                variant="solid",
+                size="2",
+                color_scheme="yellow",
+                width="100%",
+                _hover={"transform": "scale(1.02)"},
+                style={"transition": "all 0.15s ease"},
+            ),
+        ),
+        rx.text("— or —", font_size="0.65em", color="#52525b"),
         rx.button(
             rx.hstack(
                 rx.text("⭐", font_size="1em"),
@@ -2313,8 +2426,8 @@ def payment_gate() -> rx.Component:
             style={"transition": "all 0.15s ease"},
         ),
         rx.text(
-            "Telegram Stars payment via @BotFather. "
-            "1 Star = 1 summon after your free thought.",
+            "⚡ Bitcoin-first · sats go straight to the Terramon node. "
+            "Stars via @BotFather as fallback.",
             font_size="0.6em",
             color="#6b7280",
             text_align="center",
