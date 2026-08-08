@@ -293,11 +293,16 @@ class TerramonState(rx.State):
 
     @rx.var
     def static_map_url(self) -> str:
-        """G04: OpenStreetMap static map URL for birthplace, or empty if no coords."""
+        """G04: static map URL for birthplace, or empty if no coords.
+
+        staticmap.openstreetmap.de was shut down by OSM (DNS dead since 2024) —
+        swapped to Yandex Static Maps (free, no key, live). NOTE: Yandex uses
+        ll=LON,LAT (longitude FIRST).
+        """
         if self.agent_lat != 0.0 or self.agent_lon != 0.0:
             return (
-                f"https://staticmap.openstreetmap.de/staticmap.php?"
-                f"center={self.agent_lat},{self.agent_lon}&zoom=14&size=300x200"
+                f"https://static-maps.yandex.ru/1.x/?"
+                f"ll={self.agent_lon},{self.agent_lat}&z=14&size=300,200&l=map"
             )
         return ""
 
@@ -1325,7 +1330,7 @@ def terra_card(item: dict) -> rx.Component:
             rx.cond(
                 (item["lat"] != None) & (item["lon"] != None),
                 rx.image(
-                    src=f"https://staticmap.openstreetmap.de/staticmap.php?center={item['lat']},{item['lon']}&zoom=14&size=280x160",
+                    src=f"https://static-maps.yandex.ru/1.x/?ll={item['lon']},{item['lat']}&z=14&size=280,160&l=map",
                     width="100%",
                     height="auto",
                     border_radius="6px",
