@@ -1,53 +1,71 @@
-# Terramon — North Star Gap Report (v2) · 2026-08-09 (iter-10)
+# Terramon — North Star Gap Report (v2) · 2026-08-09 (iter-12)
 
-Fingerprint: `bc1d70864bdddf9e` (pre-deploy) → после деплоя `e1ebaf1` · Playwright/Chromium headless · Target: https://terramon-tma-production.up.railway.app · Тесты: 398 passed / 0 failed · reflex export: OK
+Fingerprint: `87bd6692ce8a7beb` (pre-iter-12) · Playwright/Chromium headless + TMA-mock · Target: https://terramon-tma-production.up.railway.app
 
 ---
 
 ## 0. ВЕРДИКТ ДНЯ (TL;DR)
 
-- **North Star Score: 75/100** (без изменений vs вчера, но вскрыт структурный корень блокера M7)
-- Топ-3 блокера: **1) M7 Mint-loop = 0/25 (нет игроков + Alby-конфиг неизвестен) 2) M6 Share — измерение только что включено 3) M8 D7 — нет данных (нет верификации игроков)**
-- Kill-condition монитор: share — нет данных (0 игроков) · mint 0 · дней с mint=0: с момента запуска → **не применимо, пока нет игроков** (share% не определён)
+- **North Star Score: 75/100** (состав изменился к лучшему: Geo/Lore/Win-path теперь 12/12 железно; единственный незакрытый код-гэп — M7)
+- Топ-3 блокера северной звезды: **1) M7 mint-loop (settle-нога не доказана — нужен реальный платёж владельца) 2) M6/M8 нет реальных игроков (share% и D7 нечем мерить) 3) M1 финальная проверка на реальном устройстве**
+- Kill-condition монитор: share 0 (2 теста-тапа) · mint 0 · дней с mint=0: 12+/30 → **НЕ в зоне риска (readiness-фаза), но mint=0 давит**
+- Live-сигнал: `/health` `seed_count: 2` — это, скорее всего, probe-сиды KPI-прогонов (iter-11 + iter-12, по 1 реальному сиду за прогон), НЕ живые игроки; `player_count: 0` = 0 подтверждённых initData-игроков. Причина: на Railway не задан `TERRAMON_BOT_TOKEN/BOT_TOKEN` (видно по warning при сборке) → все сессии анонимны → D7-кохорты не пишутся. **Действие владельца: задать токен бота в env Railway.**
 
 ## 1. NORTH STAR SCORE (композит)
 
 | Компонент | Вес | Сегодня | Нормализация |
 |---|---|---|---|
-| Geo-привязка | 25 | **100%** | 1/1 раундов geo_ok (доказательство: static-map URL с координатами 50.06,19.94; body-координат нет) |
-| Vision-lore («Open your eyes») | 25 | **1** | кнопка в DOM (1 шт. на main-card), лор-блок рендерится |
-| Win-path (достижимость) | 25 | **12/12** | 12 уникальных архетипов за прогон (16 карт, дублей нет) |
-| Mint-loop | 25 | **0** | mint_count=0 на проде; loop теперь достижим кодом (см. §3) |
+| Geo-привязка | 25 | **100%** (12/12) | доля существ с lat≠0 && lon≠0 — доказ. static-map URL с реальными координатами (50.0619, 19.9368) |
+| Vision-lore («Open your eyes») | 25 | **1** (12/12) | кнопка в DOM на главной карточке + лор рендерится |
+| Win-path (достижимость) | 25 | **12/12** | min(архетипов/12, 1) — полная вселенная |
+| Mint-loop | 25 | **0** | 1 = LN-инвойс → mint-событие → счётчик (цепочка не доказана end-to-end) |
 | **ИТОГО** | 100 | **75/100** | |
 
-Боевая формула (включается при реальных игроках): NSS = 40·MintRate + 30·D7 + 15·Geo + 15·Lore.
+Боевая формула (включается с реальными игроками): NSS = 40·MintRate + 30·D7 + 15·Geo + 15·Lore.
 
 ## 2. ГЭП-ТАБЛИЦА (мост «инженерия → северная звезда»)
 
-| # | Метрика | Сегодня | Цель | Гэп | Блокирует | Измерение |
-|---|---|---|---|---|---|---|
-| M1 | Geo% | 100% (симуляция, Kraków) | 100% реальных | 🟡 ждёт device-тест | идентичность карточки | AUTO (headless) |
-| M2 | Vision-lore | 1 | 1 | 🟢 ок | эмоцию/арт | AUTO |
-| M3 | Win-path | 12/12 | 12/12 | 🟢 ок | контент → D7 | AUTO |
-| M4 | Дубликаты | 12/12 уникальных | 1.0 | 🟢 ок (dedup работает) | экономику минта | AUTO |
-| M5 | Фрикция гейта | F3-гейт мёртв by design (см. §3) | 0 блоков | 🟢 для игрока (но LN-путь был недостижим — починено) | онбординг | AUTO |
-| M6 | Share-funnel | share_count в /health после деплоя; проба = 1 тап | ≥2% | 🔴 нет данных | kill-condition | AUTO (server-side) |
-| M7 | Mint rate | mint_count=0; LN-инвойс-путь теперь достижим | ≥1 минт | 🔴 структурный → починен кодом; ждёт Alby + игроков | северную звезду | AUTO |
-| M8 | D7 retention | нет данных (player_count=0) | кохорты | 🔴 нет данных | 2-ю половину NSS | NEEDS-ENV |
+| # | Метрика | Что меряет | Сегодня | Цель | Гэп | Блокирует | Измерение |
+|---|---|---|---|---|---|---|---|
+| M1 | Geo% | доля существ с реальными координатами | 12/12 (100%) | 100% | 🟢 код-ок; ждёт device-проверки | share-петлю (идентичность карточки) | AUTO + **device** |
+| M2 | Vision-lore | «Open your eyes» + рендер лора | 1 (12/12) | 1 | 🟢 ок | эмоцию/арт | AUTO |
+| M3 | Win-path | уникальные архетипы за прогон | 12/12 | 12/12 | 🟢 ок | контентную глубину → D7 | AUTO |
+| M4 | Дубликаты | unique/total | 12/15 (0.8) | 1.0 | 🟡 инфо | экономику минта | AUTO |
+| M5 | Фрикция | гейт/модалки | 0 блоков | 0 | 🟢 ок | онбординг → D7 | AUTO |
+| M6 | Share-funnel | доля сессий с share-тапом | счётчик работает (+2 за 2 тапа) | ≥2% (kill <2%) | 🔴 нет игроков | охват (kill-condition) | AUTO + **люди** |
+| M7 | Mint rate | % саммонеров с mint | 0 (mint_count=0) | ≥2% | 🔴 **settle-нога** | саму северную звезду | AUTO + **платёж владельца** |
+| M8 | D7 retention | возврат на 7-й день | нет данных | кохортный бенчмарк | 🔴 нет игроков | 2-ю половину NSS | **люди** |
 
-Регрессионные guard: 398 тестов зелёные · py_compile OK · reflex export OK.
+Регрессионные guard: 409 тестов зелёные · рефлекс-экспорт собирается · XP-ребаз/карты/yandex-гварды на месте.
 
-## 3. ТОП-3 БЛОКЕРА (ранжировано) + ЧТО СДЕЛАНО
+## 3. ТОП-3 БЛОКЕРА (ранжировано)
 
-1. **M7 Mint-loop (0/25).** Вскрыт структурный корень: `hydrate_from_memory()` считает состояние из ВСЕХ сидов глобально (на проде уже 15), `load_terra` ставит `unlocked=True` каждому посетителю → F3-гейт (`summon_count>0 & ~unlocked`) **никогда не рендерится ни для кого**, а старый KPI-проба ждала именно его (и плодила мусорные сиды «KPI GATE PROBE» — 12→15). Настоящий mint-loop — это MINT-зона карточки существа. **Сделано в iter-10:** новая кнопка **«⚡ Mint via Lightning»** на карточке (Alby Hub BOLT11 на price_sats, mint записывается ТОЛЬКО по settle через verify_lightning; общая `_lightning_invoice_panel()` для гейта и карточки; фикс verify по фактической сумме `lightning_price`). Осталось: Alby-конфиг на проде + реальные игроки.
-2. **M6 Share-funnel (нет данных).** Измерение включено: share-реестр (shares.jsonl) + `share_count`/`shares_7d` в /health (доехало в этом деплое), проба кликает «📤 Share» 1 раз за прогон. Реальный % ждёт игроков.
-3. **M8 D7 (нет данных).** На проде нет TERRAMON_BOT_TOKEN → initData не верифицируется → все анонимны → player_count=0. Нужен токен бота в Railway env.
-
-**Честные оговорки:** геолокация — Playwright-симуляция (grant_permissions + set_geolocation), не реальное устройство; M1 подтверждается только map-URL-доказательством. Проба создаёт 1 реальный сид на проде за прогон (теперь с правдоподобной русской мыслью, не мусором). Минт-кнопки проба не кликает (политика presence-only), «✅ I've paid» не жмёт, не платит.
+1. **M7 mint-loop: цепочка «инвойс → settle → счётчик» не доказана end-to-end.** В этом прогоне mint-зона «mint visible» подтверждена на свежем саммоне (карточка после Care), но инвойс не создавался (проба читала не тот вью), mint_count=0. → Iter-12 закрыл код-сторону: проба теперь жмёт Care → читает mint-зону → создаёт инвойс ровно 1 раз («⚡ Mint via Lightning» — только создание, без оплаты и без mint-записи). **Осталось: реальный платёж владельца** (оплатить инвойс ~3000 sats, «✅ I've paid — verify» → mint_count=1 → M7=1 → NSS 100). Требуется ликвидность/inbound на Alby Hub (LSP).
+2. **M6 share% / M8 D7: нет реальных игроков.** seed_count=2 намекает на первых живых. Код-сторона готова (share-счётчик пишется до clipboard, /health отдаёт share_count/shares_7d/player_count/returning_players_7d). → Нужен рост охвата: разослать бота, проверить кнопку Mini App в Telegram.
+3. **M1 на реальном устройстве.** Headless-симуляция (TMA-mock + Playwright geolocation) даёт 12/12 и static-map с реальными координатами — это код-доказательство. Финальное подтверждение разрешения геолокации в настоящем Telegram — только на телефоне.
 
 ## 4. EVIDENCE
 
-- KPI-сессия (этот прогон): geo_ok_rounds=[1] · OYE=1 · distinct=12/12 · mint_button_presence={1:0} (dedup-путь, can_mint=False by design) · probe_seed_created=True · gate-проба старая: gate_seen=false (ожидаемо — гейт мёртв)
-- /health до деплоя: `{"status":"ok","tests":84,"mint_count":0,"seed_count":15,"player_count":0,"returning_players_7d":0}` (share_count/alby_configured появятся после деплоя e1ebaf1)
-- Коммит: `e1ebaf1` (7 файлов, +1144/−146) — mint_lightning (terramon_tma.py:1627), `_lightning_invoice_panel` (3114, вызовы 2432/3192), verify fix (1785), /health tests=390 (3951), проба «мысль странника» (play_to_win.py:224), контракт-тесты (test_kpi_geo_gate.py), 8 новых тестов (test_mint_lightning.py +7, всего 398)
-- Референсы (research): getAlby/hub (инвойс→settle), WebLN (browser-wallet — не для серверных инвойсов), Telegram Stars webhook-паттерн (optimistic-mint = задокументированный MVP-гэп), LNbits
+- **M1**: static-map imgs во всех 12 раундах: `/static-map?lat=50.0619&lon=19.9368&zoom=14&w=300&h=200` (lat/lon ≠ 0 — серверная персистентность реальных координат) · честная оговорка: симуляция device-разрешения
+- **M2**: `Open-your-eyes buttons: 1` на main-card (Care) во всех 12 раундах; `main_card_oye_after_care: 12`
+- **M3**: `distinct_archetypes: 12` → все 12 архетипов вселенной
+- **M4**: `counts: ('12', '15')` на Terra (дубликаты — повторные мысли/общий текст «I refuse the system!» у 2 THOUGHTS → dedup-гард работает)
+- **M5**: `failed_rounds: []`, гейт не блокирует (SUMMON кликается напрямую), 1 модалка-дисмисс
+- **M6**: `share_count_health: before=0 after=2, share_delta=2` (серверный счётчик, 2 честных тапа)
+- **M7**: `m7_round1_probe: mint_ui_state='mint visible'` (свежий саммон, Care-вью) · `mint_button_presence: {1..12: False}` на раннем снапшоте (не-авторитетный вью — исправлено в iter-12) · `mint_count_health: 0` · `alby_configured: true` · invoice-клик НЕ выполнялся в этом прогоне (проба починена — следующий прогон даст `invoice_ok`)
+- **M8**: `player_count: 0`, `returning_players_7d: 0` — кохорт пока не из чего строить
+- **TMA**: webapp_present 12/12 раундов, haptic 12, location_requests 24, location_accessed_emitted 12 (мост геолокации TMA работает)
+
+## 5. ИТЕРАЦИЯ-12 (что зашито код-сайд)
+
+1. **KPI-проба M7 (scripts/kpi/play_to_win.py)**: pre-loop проба теперь переключается на Care-таб перед чтением mint-зоны, при «⚡ MINT ·» кликает «⚡ Mint via Lightning» РОВНО 1 раз (создание инвойса, без оплаты/записи) и парсит маркер «⚡ Invoice ready/failed»; per-round m7-доказательство читается с Care-таба (`rlog['m7_care']`) — ранние снапшоты больше не вводят в заблуждение.
+2. **Mint-воронка (terramon_tma.py)**: mint-зона («⚡ MINT · N sats» + «⚡ Mint via Lightning») теперь рендерится и на главной компакт-карточке (ZONE 1) сразу после саммона — 0 тапов до минта вместо тапа на Care (тот же can_mint-гейт; «free summon» не дублирован).
+3. **Гварды**: новый tests/test_mint_funnel_home.py (5 source-scan тестов: маркер воронки, оба рельса, отсутствие дубля «free summon», целостность Care-панели). `/health` `tests` синхронизирован: 390 → 409.
+4. **Верификация**: 409 passed / 0 failed · reflex export собирается · git diff — только свои файлы.
+
+## 6. СЛЕДУЮЩАЯ ИТЕРАЦИЯ
+
+1. Прогнать починенную KPI-пробу → ожидаем `invoice_ok=True` + «⚡ Invoice ready» на проде (код-доказательство инвойс-ноги M7).
+2. Если инвойс-нога доказана — M7 остаётся 0/1 только из-за settle: подготовить чек-лист оплаты для владельца.
+3. Кандидат: авто-переключение на Care-таб после саммона (воронка v2) — с проверкой связки с wait_result харнесса.
+4. Мониторить seed_count/player_count: первые живые игроки = включение боевой формулы NSS.

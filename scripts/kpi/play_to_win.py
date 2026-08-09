@@ -383,6 +383,18 @@ with sync_playwright() as p:
         probe_page.wait_for_timeout(2500)
         if "A new presence stirs" in probe_body:
             m7_probe["probe_seed_created"] = True
+        # The creature-card MINT area ('⚡ MINT · N sats' + '⚡ Mint via
+        # Lightning') renders ONLY when the bottom-nav Care tab is active
+        # (active_tab == 'care'); right after a fresh summon the app is on
+        # the Terra tab, so click the Care tab FIRST — otherwise the body
+        # read below sees 'unknown' even when the mint area is live.
+        try:
+            probe_care_tab = probe_page.locator("button:has-text('Care')").first
+            if probe_care_tab.count() > 0 and probe_care_tab.is_visible():
+                probe_care_tab.click(timeout=4000)
+                probe_page.wait_for_timeout(1500)
+        except Exception as e:
+            print(f"   [m7-probe] Care tab click failed (not fatal): {str(e)[:120]}")
         # MINT-area evidence on the fresh-summon card: presence-only check
         # of the REAL mint loop ('⚡ MINT · N sats' renders only when
         # price_sats > 0 AND can_mint, computed on a fresh summon). Re-read
@@ -523,12 +535,13 @@ with sync_playwright() as p:
 
             # M7: mint-loop evidence (presence-only — never click any mint
             # button that creates a mint record, never '✅ I've paid — verify',
-            # never pay)
+            # never pay). Early snapshot is INFORMATIONAL only (right after
+            # SUMMON the app is on the Terra tab, where the creature-card
+            # MINT area is not rendered); the authoritative per-round mint
+            # evidence comes from the m7_care read on the Care tab below.
             m7 = m7_check(page)
             rlog["m7"] = m7
             print(f"   [M7 evidence] {json.dumps(m7, ensure_ascii=False)}")
-            mint_presence[round_no] = m7["mint_button_presence"]
-            mint_ui_state_rounds[round_no] = m7["mint_ui_state"]
 
             # TMA-only evidence: what the mock recorded during this round
             # (openInvoice / HapticFeedback / LocationButton / event bus).
@@ -599,6 +612,26 @@ with sync_playwright() as p:
             except Exception as e:
                 rlog["m2_after_care"] = {"oye": 0, "map_imgs": [], "geo_ok": False, "error": str(e)[:120]}
                 print(f"   -> main-card (Care tab) re-check failed (not fatal): {str(e)[:120]}")
+
+            # M7 (authoritative, Care tab): the creature-card MINT area
+            # ('⚡ MINT · N sats' + '⚡ Mint via Lightning') renders only when
+            # the bottom-nav Care tab is active (active_tab == 'care'), and
+            # the Care re-check above has just clicked it — so the per-round
+            # NSS mint evidence is computed HERE on the Care-tab body read,
+            # replacing the early Terra-tab snapshot values. Presence-only:
+            # never click any mint button that creates a mint record, never
+            # '✅ I've paid — verify', never pay.
+            try:
+                m7_care_body = page.locator("body").inner_text()
+                mint_button_presence = "⚡ MINT ·" in m7_care_body
+                mint_ui_state = mint_ui_state_from_body(m7_care_body)
+                rlog["m7_care"] = {"mint_button_presence": mint_button_presence,
+                                   "mint_ui_state": mint_ui_state}
+                mint_presence[round_no] = mint_button_presence
+                mint_ui_state_rounds[round_no] = mint_ui_state
+                print(f"   [m7-care] MINT area: presence={mint_button_presence}, ui_state={mint_ui_state}")
+            except Exception as e:
+                print(f"   [m7-care] body read failed (not fatal): {str(e)[:120]}")
 
             # M6 share probe (round 1 only, Care tab, after a successful
             # summon where has_summoned=True): click '📤 Share' EXACTLY
@@ -690,9 +723,9 @@ with sync_playwright() as p:
     print(f"geo_ok_rounds: {geo_ok_rounds}  (geo_ok_rounds now counts map-URL coords OR body-text coords; body coords = place contains coords != '0.00, 0.00')")
     print(f"distinct_archetypes: {len(collected)} -> {sorted(collected.keys())}")
     print(f"oye_buttons_total: {oye_total}")
-    print(f"mint_button_presence: {mint_presence}  (round -> '⚡ MINT · N sats' visible on the creature card; never clicked — presence-only policy)")
-    print(f"mint_ui_state: {mint_ui_state_rounds}  (creature-card MINT area per round: 'mint visible' / 'locked · train more' / 'free summon' / 'unknown')")
-    print(f"invoice_ok: {invoice_ok_rounds if invoice_ok_rounds else 'no invoice message observed (MINT area not live or no agent_message)'}")
+    print(f"mint_button_presence: {mint_presence}  (round -> '⚡ MINT · N sats' visible on the creature card; per-round evidence comes from the Care-tab read (rlog['m7_care']) — the MINT area renders only when the Care tab is active; never clicked — presence-only policy)")
+    print(f"mint_ui_state: {mint_ui_state_rounds}  (creature-card MINT area per round, from the Care-tab read (rlog['m7_care']): 'mint visible' / 'locked · train more' / 'free summon' / 'unknown')")
+    print(f"invoice_ok: {invoice_ok_rounds if invoice_ok_rounds else 'no invoice message observed (MINT area not live or no agent_message)'}  (preloop probe: ONE '⚡ Mint via Lightning' invoice-creation click on the live fresh-summon MINT area — creates an Alby Hub invoice only, NO mint record, NO payment; markers parsed from the agent_message)")
     m7_round1_probe = next((r.get("m7_round1_probe") for r in round_log if r.get("m7_round1_probe") is not None), None)
     print(f"m7_round1_probe (round 1): {json.dumps(m7_round1_probe, ensure_ascii=False) if m7_round1_probe else 'not probed'}  (dedup card: _present_existing_creature sets price_sats but NEVER can_mint, so the mint button is hidden by design there — 'locked · train more')")
     print(f"m7_probe_preloop: {json.dumps(m7_probe, ensure_ascii=False)}  (run-unique thought '{m7_probe.get('probe_thought')}' -> REAL new summon bypassing dedup -> fresh-summon MINT area + '⚡ Mint via Lightning' invoice-creation click; invoice_ok + alby_configured tell whether Alby Hub is configured on prod; probe_seed_created=True means ONE real seed created on prod by this run — honest note)")

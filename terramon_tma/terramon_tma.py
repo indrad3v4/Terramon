@@ -3587,6 +3587,40 @@ def index() -> rx.Component:
                                             max_width="260px"),
                                     rx.fragment(),
                                 ),
+                                # ── M7-funnel: home compact card mint area (same gate as Care panel) ──
+                                rx.cond(
+                                    TerramonState.price_sats > 0,
+                                    rx.cond(
+                                        TerramonState.can_mint,
+                                        rx.vstack(
+                                            rx.tooltip(
+                                                rx.button(
+                                                    "⚡ MINT · " + TerramonState.price_sats.to_string() + " sats",
+                                                    on_click=TerramonState.mint_creature,
+                                                    background=TerramonState.color,
+                                                    color="#0b0b0f",
+                                                    size="1",
+                                                    width="100%",
+                                                    _hover={"transform": "scale(1.02)", "opacity": "0.9"},
+                                                    style={"transition": "all 0.15s ease"},
+                                                ),
+                                                content="Mint this creature to Telegram Stars — tradable collectible on-chain",
+                                            ),
+                                            rx.button(
+                                                "⚡ Mint via Lightning",
+                                                on_click=TerramonState.mint_lightning,
+                                                variant="surface",
+                                                size="1",
+                                                color_scheme="yellow",
+                                                width="100%",
+                                            ),
+                                            spacing="1",
+                                            width="100%",
+                                        ),
+                                        rx.text("locked · train more", color="#6b7280", font_size="0.65em"),
+                                    ),
+                                    rx.fragment(),
+                                ),
                                 spacing="1",
                                 align="center",
                             ),
@@ -3951,7 +3985,7 @@ def health(request):
         alby_configured = False
     return JSONResponse({
         "status": "ok",
-        "tests": 390,  # pytest count, synced at iter-10
+        "tests": 409,  # pytest count, synced at iter-12 (5 funnel guards added)
         "mint_count": mint_count,
         "seed_count": seed_count,
         "player_count": player_count,
