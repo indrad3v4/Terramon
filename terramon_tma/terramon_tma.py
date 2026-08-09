@@ -61,6 +61,14 @@ from terramon.application.insight_engine import _scores, _THEMES
 from terramon.application.agent_service import AgentService
 from terramon.application.llm_behavior import set_api_key as _init_llm
 from terramon.domain.creature_agent import CreatureAgent
+from terramon.domain.candle import (
+    CANDLE_PRICE_SATS,
+    candle_js,
+    candle_lore_for,
+    candle_outcome,
+    persist_candle_lore,
+    seed_is_released,
+)
 from terramon.domain.insight import GeoContext, Insight
 from tools.time_tool import get_current_time
 
@@ -294,6 +302,7 @@ class TerramonState(rx.State):
 
     # G05: Geo-capture state — '' | 'granted' | 'denied'
     geo_status: str = ""
+    pending_thought: str = ""  # first-summon geo gate: text held while awaiting coords
     geo_lat: float = 0.0
     geo_lon: float = 0.0
     geo_place: str = ""
@@ -348,6 +357,15 @@ class TerramonState(rx.State):
     released_just_now: bool = False
     released_count: int = 0  # reframed win counter — released-based ("Встречено X из 5")
 
+    # «Зажечь свечу» — WebLN candle ritual on a released creature's birthplace.
+    # 500-sat keysend zap from the player's browser wallet (Alby extension);
+    # the reward is a NEW creature line (candle_lore), not cosmetics.
+    candle_price: int = CANDLE_PRICE_SATS
+    candle_state: str = ""        # '' | 'paying' | 'lit' | 'failed' | 'nowebln'
+    candle_lore: str = ""         # the creature's new line after lighting
+    candle_lit: bool = False      # session flag — shows the flame + words
+    candle_reason: str = ""       # last failure reason ('nowebln', 'rejected', ...)
+
     # P3 M04: Creature trading
     show_trade_dialog: bool = False
     trade_target_id: int = 0
@@ -384,6 +402,16 @@ class TerramonState(rx.State):
         return _RARITY_GLOW.get(self.rarity, _RARITY_GLOW["common"])
 
     @rx.var
+    def candle_visible(self) -> bool:
+        """«Зажечь свечу» block renders only for a released creature.
+
+        Session truth: released_just_now (set right after the release
+        receipt). The seed-status fallback covers the reload case where
+        load_terra() re-syncs the flag from the persisted seed record.
+        """
+        return bool(self.released_just_now)
+
+    @rx.var
     def evolution_hint(self) -> str:
         """Actionable evolution progress text (Phase 2)."""
         pct = self.agent_evolution_prob
@@ -414,13 +442,27 @@ class TerramonState(rx.State):
     def capture_location(self):
         """G05: request device coordinates — Telegram LocationButton (native
         picker) with navigator.geolocation fallback. Result lands in
-        geo_status / geo_lat / geo_lon."""
-        coords = None
-        try:
-            coords = yield rx.call_script(_LOCATION_JS)
-        except Exception:
-            coords = None
-        self._apply_coords(coords)
+        geo_status / geo_lat / geo_lon.
+
+        NOTE: in Reflex 0.9.x a plain (non-async) event cannot capture the
+        result of rx.call_script via `yield` — the value is delivered to the
+        `callback=` handler instead (reflex_base/event/__init__.py:1739).
+        """
+        yield rx.call_script(_LOCATION_JS, callback=TerramonState.on_coords)
+
+    @rx.event
+    def on_coords(self, result):
+        """Receive the geolocation result from the call_script callback.
+
+        Applies coords, then re-runs summon() to finish the deferred
+        first-summon (the thought was held in pending_thought).
+        """
+        self._apply_coords(result)
+        if self.pending_thought:
+            text = self.pending_thought
+            self.pending_thought = ""
+            self.thought = text
+            yield TerramonState.summon
 
     def _refresh_released_count(self) -> None:
         """Reframe: 'Встречено X из 5' reads the released-based win counter."""
@@ -446,31 +488,15 @@ class TerramonState(rx.State):
             return
         self.summoning = True
         # G05: FIRST summon — capture location so the creature is born
-        # anchored to a real place. Inline JS literal (not the module
-        # constant) — same mechanism as the proven HapticFeedback call:
-        # Reflex serializes the literal into the event payload reliably.
+        # anchored to a real place. Reflex 0.9.x: the call_script result is
+        # delivered to callback= (not via yield), so we defer the summon:
+        # store the thought, request coords, _on_coords re-runs summon().
         if self.summon_count == 0 and self.geo_status == "":
-            try:
-                coords = yield rx.call_script(
-                    "(async () => {"
-                    "const tg = window.Telegram?.WebApp;"
-                    "if (tg && tg.LocationButton){"
-                    "tg.LocationButton.show();"
-                    "return await new Promise((resolve)=>{"
-                    "const t=setTimeout(()=>{tg.LocationButton.hide();resolve(null);},60000);"
-                    "tg.onEvent('location_accessed',(loc)=>{"
-                    "clearTimeout(t);tg.LocationButton.hide();"
-                    "resolve({lat:loc.latitude,lon:loc.longitude});});});}"
-                    "return await new Promise((resolve)=>{"
-                    "if(!navigator.geolocation)return resolve(null);"
-                    "navigator.geolocation.getCurrentPosition("
-                    "(pos)=>resolve({lat:pos.coords.latitude,lon:pos.coords.longitude}),"
-                    "()=>resolve(null),{timeout:10000,maximumAge:300000});});"
-                    "})()"
-                )
-            except Exception:
-                coords = None
-            self._apply_coords(coords)
+            self.pending_thought = text
+            self.summoning = False
+            self.agent_message = "📍 Закрепи свою мысль на планете — разреши геолокацию"
+            yield rx.call_script(_LOCATION_JS, callback=TerramonState._on_coords)
+            return
         try:
             _geo = (
                 GeoContext(self.geo_lat, self.geo_lon, self.geo_place)
@@ -515,6 +541,13 @@ class TerramonState(rx.State):
             self.goal_reached = result.goal_reached
             self.has_summoned = True
             self.summon_count += 1
+            # Candle ritual: a new creature starts unlit — clear the previous
+            # release/candle session state so the block re-gates correctly.
+            self.released_just_now = False
+            self.candle_state = ""
+            self.candle_lore = ""
+            self.candle_lit = False
+            self.candle_reason = ""
             seeds = _MEMORY.load_all_seeds()
             self.reflection = _reflect_on_memory(seeds, result.agent)
             if seeds:
@@ -770,6 +803,13 @@ class TerramonState(rx.State):
     @rx.event
     def load_terra(self):
         """Load the player's persisted terra on app open (survives redeploys)."""
+        # Candle ritual: start unlit; the seed sync below restores the lit
+        # state for an already-released creature with a persisted candle.
+        self.released_just_now = False
+        self.candle_state = ""
+        self.candle_lore = ""
+        self.candle_lit = False
+        self.candle_reason = ""
         seeds = _MEMORY.load_all_seeds()
         self.terra = [_seed_to_card(s) for s in seeds]
         if seeds:
@@ -791,6 +831,20 @@ class TerramonState(rx.State):
         # Phase 4: tick decay on app open (retention)
         if seeds:
             self._apply_tick_decay()
+
+        # Candle ritual: restore the released flag + candle lore from the
+        # persisted seed record (survives reloads) so the memorial card and
+        # the «Зажечь свечу» block render correctly.
+        try:
+            for s in reversed(seeds):
+                if s.summoned_agent == self.agent and s.raw_input == self.thought:
+                    self.released_just_now = s.status == "released"
+                    self.candle_lore = getattr(s, "candle_lore", "")
+                    self.candle_lit = bool(self.candle_lore)
+                    self.released_words = self.released_words or self.final_words
+                    break
+        except Exception as e:
+            log.warning(f"Candle state sync failed: {e}")
 
     @rx.event
     def capture(self):
@@ -1437,6 +1491,63 @@ class TerramonState(rx.State):
             self.agent_message = f"⚡ Verify failed: {getattr(e, 'message', e)}"
 
     @rx.event
+    def light_candle(self):
+        """«Зажечь свечу» — the emotional monetization ritual.
+
+        A 500-sat Lightning zap from the player's OWN browser wallet via
+        WebLN (Alby extension). No invoice node needed: keysend is a push
+        payment, so the Alby Hub's 2501-sat JIT floor never applies. The
+        reward is a NEW creature line appended to its memory — words, not
+        cosmetics. Deterministic template: ZERO LLM calls on this path.
+
+        Flow: inline JS (same pattern as the HapticFeedback literal) checks
+        window.webln → enable() → keysend (fallback: sendPayment) → the
+        result dict comes back here via the rx.call_script yield.
+        """
+        if not self.released_just_now and not seed_is_released(
+            _MEMORY, self.agent, self.thought
+        ):
+            self.agent_message = "🕯️ Свечу можно зажечь только у отпущенного существа."
+            return
+        if self.candle_lit:
+            self.agent_message = "🕯️ Свеча уже горит. Огонь помнит тебя."
+            return
+        self.candle_state = "paying"
+        self.candle_reason = ""
+        try:
+            payload = yield rx.call_script(candle_js())
+        except Exception as e:
+            log.warning(f"light_candle JS failed: {e}")
+            payload = {"ok": False, "reason": "error"}
+        outcome = candle_outcome(payload)
+        if outcome["state"] == "lit":
+            lore = candle_lore_for(self.released_words or self.final_words)
+            self.candle_lore = lore
+            self.candle_lit = True
+            self.candle_state = "lit"
+            self.agent_message = "🔥 Свеча зажжена. Существо ответило тебе."
+            # Persist on the creature seed (survives reloads) — silent fail.
+            if not persist_candle_lore(_MEMORY, self.agent, self.thought, lore):
+                log.warning("candle_lore persistence failed for %s", self.agent)
+            try:
+                seeds = _MEMORY.load_all_seeds()
+                self.terra = [_seed_to_card(s) for s in seeds]
+            except Exception as e:
+                log.warning(f"Terra reload after candle failed: {e}")
+        elif outcome["state"] == "nowebln":
+            self.candle_state = "nowebln"
+            self.candle_reason = "nowebln"
+            self.agent_message = "⚡ Установи Alby-кошелёк, чтобы зажечь свечу."
+        else:
+            self.candle_state = "failed"
+            self.candle_reason = outcome["reason"]
+            self.agent_message = (
+                "⚡ Зажжение не удалось ("
+                + (outcome["reason"] or "error")
+                + "). Попробуй ещё раз."
+            )
+
+    @rx.event
     def share_creature(self):
         """Copy shareable creature card to clipboard (virality)."""
         if not self.has_summoned:
@@ -1637,6 +1748,8 @@ def _seed_to_card(seed: ThoughtSeed) -> dict:
         "timestamp": seed.timestamp,
         "insight": f"INSIGHT: {seed.insight.therefore}" if seed.insight else "",
         "released": seed.status == "released",
+        # Candle ritual: the creature's new line ('' = candle never lit)
+        "candle_lore": getattr(seed, "candle_lore", ""),
         # P3 M04: Trade info
         "for_trade": getattr(seed, 'for_trade', False),
         "trade_price_sats": getattr(seed, 'trade_price_sats', 0),
@@ -2338,6 +2451,107 @@ def creature_care_panel() -> rx.Component:
                         background="#1a2e1a",
                         border="1px solid #22c55e44",
                         border_radius="10px",
+                        width="100%",
+                    ),
+                    rx.fragment(),
+                ),
+                # «Зажечь свечу» — the emotional monetization ritual.
+                # Visible ONLY for a released creature. 500-sat WebLN zap from
+                # the player's own wallet (keysend — no invoice node needed).
+                # The reward is the creature's NEW WORDS, not cosmetics.
+                rx.cond(
+                    TerramonState.candle_visible,
+                    rx.box(
+                        rx.vstack(
+                            rx.cond(
+                                TerramonState.candle_lit,
+                                rx.box(
+                                    rx.vstack(
+                                        rx.text("🔥", font_size="1.2em"),
+                                        rx.text(
+                                            TerramonState.candle_lore,
+                                            font_size="0.75em",
+                                            color="#fbbf24",
+                                            font_style="italic",
+                                            text_align="center",
+                                        ),
+                                        rx.text("Свеча горит у места рождения",
+                                                font_size="0.6em",
+                                                color="#6b7280",
+                                                font_style="italic"),
+                                        spacing="1",
+                                        align="center",
+                                        width="100%",
+                                    ),
+                                    padding="0.6em 0.8em",
+                                    background="#1f1a10",
+                                    border="1px solid #f59e0b44",
+                                    border_radius="10px",
+                                    width="100%",
+                                ),
+                                rx.vstack(
+                                    rx.button(
+                                        rx.hstack(
+                                            rx.text("🕯️", font_size="0.9em"),
+                                            rx.text(
+                                                "Зажечь свечу · "
+                                                + TerramonState.candle_price.to_string()
+                                                + " sats",
+                                                font_size="0.8em",
+                                            ),
+                                            spacing="1",
+                                        ),
+                                        on_click=TerramonState.light_candle,
+                                        variant="ghost",
+                                        size="2",
+                                        color_scheme="amber",
+                                        width="100%",
+                                        is_disabled=(
+                                            TerramonState.candle_state == "paying"
+                                        ),
+                                        _hover={"transform": "scale(1.02)"},
+                                        style={"transition": "all 0.15s ease"},
+                                    ),
+                                    rx.cond(
+                                        TerramonState.candle_state == "paying",
+                                        rx.text("Свеча загорается…",
+                                                font_size="0.65em",
+                                                color="#f59e0b",
+                                                font_style="italic"),
+                                        rx.cond(
+                                            TerramonState.candle_state == "nowebln",
+                                            rx.text(
+                                                "⚡ Установи Alby-кошелёк, "
+                                                "чтобы зажечь свечу",
+                                                font_size="0.65em",
+                                                color="#9ca3af",
+                                                font_style="italic",
+                                            ),
+                                            rx.cond(
+                                                TerramonState.candle_state == "failed",
+                                                rx.text(
+                                                    "Зажжение не удалось — попробуй ещё раз",
+                                                    font_size="0.65em",
+                                                    color="#f87171",
+                                                    font_style="italic",
+                                                ),
+                                                rx.text(
+                                                    "500 сатоши из твоего кошелька — "
+                                                    "и существо скажет новое слово",
+                                                    font_size="0.6em",
+                                                    color="#6b7280",
+                                                    font_style="italic",
+                                                ),
+                                            ),
+                                        ),
+                                    ),
+                                    spacing="1",
+                                    align="center",
+                                    width="100%",
+                                ),
+                            ),
+                        ),
+                        padding="0.4em 0.2em",
                         width="100%",
                     ),
                     rx.fragment(),
