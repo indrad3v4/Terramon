@@ -309,6 +309,34 @@ def fetch_alby_configured():
     except Exception as e:
         return f"health fetch failed: {str(e)[:120]}"
 
+def _button_is_covered(page, locator):
+    """True when another element paints over the button's center (hit-target).
+
+    Mirrors Playwright's actionability hit-target check: at the button's
+    bounding-box center, document.elementFromPoint must resolve to the
+    button itself or one of its descendants. On prod there are TWO
+    '⚡ Mint via Lightning' buttons: the home compact card's (always
+    rendered, but its button is COVERED by the thought input element in the
+    fixed-height no-scroll layout — elementFromPoint at its center returns
+    the INPUT, which is not inside the button) and the Care-panel button
+    (center resolves to the BUTTON itself). Any evaluation error -> False
+    (never block the probe).
+    """
+    try:
+        return page.evaluate(
+            """(btn) => {
+                const r = btn.getBoundingClientRect();
+                if (!r || r.width === 0 || r.height === 0) return false;
+                const el = document.elementFromPoint(
+                    r.left + r.width / 2, r.top + r.height / 2);
+                if (!el) return true;  // nothing at the center -> covered
+                return !(el === btn || btn.contains(el));
+            }""",
+            locator.element_handle(),
+        )
+    except Exception:
+        return False
+
 def run_m7_mint_probe(browser, thought, candidate_label="probe"):
     """M7 mint-loop invoice probe: summon `thought` in a fresh context and,
     IF the creature-card MINT area renders, click '⚡ Mint via Lightning'
@@ -401,11 +429,27 @@ def run_m7_mint_probe(browser, thought, candidate_label="probe"):
         # by parse_invoice_status below.
         if m7_probe["mint_button_presence"]:
             try:
-                mint_lightning_btn = probe_page.locator("button:has-text('⚡ Mint via Lightning')").first
-                mint_lightning_btn.click(timeout=4000)
-                m7_probe["mint_clicked"] = True
-                print(f"   [m7-probe:{candidate_label}] clicked '⚡ Mint via Lightning' once (invoice creation only, no payment attempted)")
-                probe_page.wait_for_timeout(2500)
+                # TWO '⚡ Mint via Lightning' buttons can coexist in the DOM:
+                # the home compact card (always rendered; its button is
+                # COVERED by the thought input element in the fixed-height
+                # no-scroll layout) and the Care-panel button (fully
+                # clickable). Never blind-click .first — Playwright's
+                # hit-target actionability check would timeout (4000ms) on
+                # the covered home-card one. Click the FIRST match that is
+                # visible AND whose bounding-box center hit-target resolves
+                # to the button itself (elementFromPoint check in
+                # _button_is_covered) — i.e. the Care-panel button.
+                mint_btns = probe_page.locator("button:has-text('⚡ Mint via Lightning')")
+                for i in range(mint_btns.count()):
+                    mint_lightning_btn = mint_btns.nth(i)
+                    if mint_lightning_btn.is_visible() and not _button_is_covered(probe_page, mint_lightning_btn):
+                        mint_lightning_btn.click(timeout=4000)
+                        m7_probe["mint_clicked"] = True
+                        print(f"   [m7-probe:{candidate_label}] clicked '⚡ Mint via Lightning' once (match #{i} — visible and not covered; invoice creation only, no payment attempted)")
+                        probe_page.wait_for_timeout(2500)
+                        break
+                else:
+                    print(f"   [m7-probe:{candidate_label}] '⚡ Mint via Lightning' present but no visible, uncovered button found (not fatal)")
             except Exception as e:
                 print(f"   [m7-probe:{candidate_label}] '⚡ Mint via Lightning' click failed (not fatal): {str(e)[:120]}")
         # M6 share probe: NOT part of this mint-loop function — it runs

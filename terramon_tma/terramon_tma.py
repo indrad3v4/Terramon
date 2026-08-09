@@ -3581,14 +3581,26 @@ def index() -> rx.Component:
                                 # Phase 2: archetype lore on compact card
                                 rx.text(TerramonState.lore, font_size="0.65em",
                                         color="#9ca3af", text_align="center",
-                                        max_width="260px", font_style="italic"),
+                                        max_width="260px", font_style="italic",
+                                        style={
+                                            "display": "-webkit-box",
+                                            "-webkit-line-clamp": "2",
+                                            "-webkit-box-orient": "vertical",
+                                            "overflow": "hidden",
+                                        }),
                                 # F1.1: Compact speech bubble
                                 rx.cond(
                                     TerramonState.creature_greeting != "",
                                     rx.box(
                                         rx.text(TerramonState.creature_greeting,
                                                 font_size="0.6em", color="#d8b4fe",
-                                                font_style="italic", text_align="center"),
+                                                font_style="italic", text_align="center",
+                                                style={
+                                                    "display": "-webkit-box",
+                                                    "-webkit-line-clamp": "2",
+                                                    "-webkit-box-orient": "vertical",
+                                                    "overflow": "hidden",
+                                                }),
                                         padding="0.3em 0.6em",
                                         background="#1e1e2a",
                                         border_radius="8px",
@@ -3617,7 +3629,13 @@ def index() -> rx.Component:
                                     rx.text(TerramonState.memory_greeting,
                                             font_size="0.55em", color="#a78bfa",
                                             text_align="center", font_style="italic",
-                                            max_width="260px"),
+                                            max_width="260px",
+                                            style={
+                                                "display": "-webkit-box",
+                                                "-webkit-line-clamp": "1",
+                                                "-webkit-box-orient": "vertical",
+                                                "overflow": "hidden",
+                                            }),
                                     rx.fragment(),
                                 ),
                                 # ── M7-funnel: home compact card mint area (same gate as Care panel) ──
@@ -3658,6 +3676,8 @@ def index() -> rx.Component:
                                 align="center",
                             ),
                             width="100%",
+                            max_height="100%",
+                            overflow_y="auto",
                             style=rx.cond(
                                 TerramonState.evolve_animating,
                                 {"animation": "evolutionScale 1s ease-out 1"},
