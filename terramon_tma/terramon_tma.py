@@ -156,7 +156,12 @@ if not _BOT_TOKEN:
 
 # Telegram Stars invoice for creature minting (Stars rail). openInvoice has
 # NO server callback in this MVP — the mint record for this rail is recorded
-# OPTIMISTICALLY on click (see mint_creature); Lightning mints on settle.
+# OPTIMISTICALLY on click (see mint_creature / buy_stars); Lightning mints
+# on settle (verify_lightning).
+# TODO(MVP→v1): replace this PLACEHOLDER with the REAL Stars invoice link
+# from @BotFather (BotFather → Settings → Payments → Stars). Do NOT invent
+# a URL: until then buy_stars/mint_creature keep minting optimistically and
+# the guarded openInvoice simply no-ops when Telegram.WebApp is absent.
 _STARS_INVOICE_URL = "https://t.me/terramon_bot/TERRAMON_STAR_INVOICE"
 
 # F3 gate: price to summon AGAIN after the free first summon. This is a
@@ -1658,11 +1663,27 @@ class TerramonState(rx.State):
 
     @rx.event
     def buy_stars(self):
-        """F3 — Telegram Stars payment (1 Star per summon).
-        Opens Stars invoice via TMA bridge (Telegram.WebApp.openInvoice).
-        Falls back to unlock on same turn for MVP development."""
-        # Replace with your real Stars invoice link from @BotFather
-        self.unlocked = True  # MVP fallback — remove when real invoice is live
+        """F3 — Telegram Stars rail: MINT the current creature for 1 Star.
+
+        Same honest MVP contract as mint_creature: Telegram Stars
+        openInvoice has NO server callback, so the mint record is written
+        OPTIMISTICALLY on click (idempotent _record_mint, see above).
+        The gate ALWAYS closes (unlocked=True) — the player keeps their
+        creature even while _STARS_INVOICE_URL is a placeholder.
+        Lightning stays the BTC-first primary (mints on settle, see
+        verify_lightning). No price_sats guard here on purpose: the F3
+        gate price is FIXED (GATE_SUMMON_STARS), independent of the last
+        creature's tier, which is 0 for free tiers.
+        """
+        if not self.has_summoned:
+            return
+        # Stars mint: optimistic record — openInvoice has no callback.
+        if self._record_mint():
+            self.agent_message = (
+                f"💠 {self.agent} minted — a tradable collectible! "
+                f"({self.mint_count} minted total)"
+            )
+        self.unlocked = True  # gate closes on click — same UX as today
         return rx.call_script(
             f"if(window.Telegram?.WebApp?.openInvoice)Telegram.WebApp.openInvoice('{_STARS_INVOICE_URL}');"
         )
@@ -3091,7 +3112,7 @@ def payment_gate() -> rx.Component:
         rx.button(
             rx.hstack(
                 rx.text("⭐", font_size="1em"),
-                rx.text("Summon (1 Star)", font_size="0.8em"),
+                rx.text("Mint (1 Star)", font_size="0.8em"),
                 spacing="1",
             ),
             on_click=TerramonState.buy_stars,

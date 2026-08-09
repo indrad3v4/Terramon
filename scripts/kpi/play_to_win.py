@@ -60,8 +60,8 @@ def wait_result(page):
     for i in range(40):
         page.wait_for_timeout(2000)
         body = page.locator("body").inner_text()
-        if "Summon (1 Star)" in body and not gate_clicked:
-            gate = page.locator("button:has-text('Summon (1 Star)')").first
+        if "Mint (1 Star)" in body and not gate_clicked:
+            gate = page.locator("button:has-text('Mint (1 Star)')").first
             if gate.count() > 0 and gate.is_visible():
                 try:
                     gate.click(timeout=2000)
