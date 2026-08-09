@@ -126,16 +126,43 @@ def _rarity_logits(text: str) -> list[float]:
 
     # Legendary signals (strongest shift — big logit on legendary)
     legendary_terms = ("i am the", "command the", "ascend", "i surrender to the",
-                       "the universe", "the void", "ancient truth")
+                       "the universe", "the void", "ancient truth",
+                       # Russian stems (TMA UI is Russian) — stem-substring
+                       # matching, same mechanism as the English terms above.
+                       # Each stem verified against common-Russian false
+                       # positives: 'бог' alone is avoided (matches
+                       # 'богатство' wealth); 'божеств' is safe and covers
+                       # both 'божество' (deity) and 'божественный' (divine).
+                       "легенд", "пророчеств", "бессмерт", "избранн",
+                       "древн", "божеств", "мифическ", "вечн")
     legendary_score = sum(1 for t in legendary_terms if t in lowered)
 
     # Rare signals
     rare_terms = ("rare", "lost", "alone", "shadow", "break", "truth",
-                  "secret", "hidden", "forbidden")
+                  "secret", "hidden", "forbidden",
+                  # Russian stems — 'запрещ' covers 'запрещено' (forbidden),
+                  # 'запрет' covers 'запретный'; both are safe. 'тень'
+                  # does not collide with 'теперь'/'растение' (see below).
+                  # 'забыт' covers 'забытый' (forgotten) — and the infinitive
+                  # 'забыть', which is semantically consistent (loss/forgetting).
+                  # 'тень' covers nominative/instrumental ('тень', 'тенью');
+                  # 'тени' covers the very frequent genitive/prepositional form
+                  # ('в тени'). Known mild orthographic overlap: 'тени' also
+                  # matches 'растение' (plant) — a +1 rare nudge only, the
+                  # prior still dominates (P(rare) ~0.30 vs 0.13 base).
+                  "тайн", "секрет", "скрыт", "запрет", "запрещ", "тень",
+                  "тени",
+                  "потерян", "одинок", "сломан", "истин", "забыт", "редк")
     rare_score = sum(1 for t in rare_terms if t in lowered)
 
     # Uncommon signals (mild)
-    uncommon_terms = ("search", "journey", "seek", "wonder", "deep", "beyond")
+    uncommon_terms = ("search", "journey", "seek", "wonder", "deep", "beyond",
+                      # Russian stems — 'далек' covers 'далеко'/'далекий'
+                      # (far); 'странств' (wandering) is mild and also
+                      # matches 'пространство' (space) — a harmless nudge
+                      # toward the free uncommon tier only.
+                      "поиск", "странств", "глубин", "мечта", "далек",
+                      "путешеств")
     uncommon_score = sum(1 for t in uncommon_terms if t in lowered)
 
     # Normalize: stronger signals → bigger shift

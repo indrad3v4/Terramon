@@ -17,6 +17,10 @@ Design lock-ins under test:
   back to price_sats — never the stale creature price alone
   (pay_lightning invoices at GATE_SUMMON_PRICE_SATS while a free-tier
   creature has price_sats == 0).
+- mint_lightning() invoices at the Lightning JIT-floor price via
+  lightning_mint_price (>= LIGHTNING_MIN_MINT_SATS, above the Alby Hub
+  2501-sat JIT floor) — NOT the raw Stars-typed price_sats (the mint area
+  renders only when price_sats > 0).
 - _lightning_invoice_panel() is the single shared invoice UI (QR + BOLT11 +
   verify + new invoice), self-gating on lightning_invoice != '', used by
   BOTH payment_gate() and creature_care_panel().
@@ -78,8 +82,9 @@ def _top_level_func_lines(source: str, name: str) -> str:
 def test_mint_lightning_handler_contract(source):
     """(a) mint_lightning exists with: the same silent guard as
     mint_creature, an already-minted early return, an Alby-not-configured
-    early return, a creature-price invoice via _ALBY.create_payment, and
-    the three KPI-parsed ⚡ markers (byte-identical to pay_lightning)."""
+    early return, a JIT-floor-clearing Lightning invoice via
+    lightning_mint_price -> _ALBY.create_payment, and the three KPI-parsed
+    ⚡ markers (byte-identical to pay_lightning)."""
     body = _method_body(source, "mint_lightning")
 
     # Same silent guard as mint_creature (no message, no invoice).
@@ -95,7 +100,12 @@ def test_mint_lightning_handler_contract(source):
         "mint_lightning missing the not-configured marker"
     )
     assert "_ALBY.url" in body and "_ALBY.api_key" in body
-    # Invoice creation at the CREATURE price (not the fixed gate price).
+    # Invoice at the Lightning JIT-floor price via lightning_mint_price
+    # (>= LIGHTNING_MIN_MINT_SATS) — the raw Stars-typed price_sats (15-25)
+    # is below the Alby Hub 2501-sat JIT floor and fails with HTTP 500.
+    assert "price = lightning_mint_price(self.price_sats)" in body, (
+        "mint_lightning does not invoice via lightning_mint_price"
+    )
     assert "_ALBY.create_payment(" in body, (
         "mint_lightning does not call _ALBY.create_payment"
     )
@@ -108,6 +118,15 @@ def test_mint_lightning_handler_contract(source):
     assert "⚡ Invoice ready:" in body, "mint_lightning missing the invoice-ready marker"
     assert "⚡ Invoice failed:" in body, "mint_lightning missing the invoice-failed marker"
     assert "getattr(e, 'message', e)" in body
+
+
+def test_lightning_mint_price_import_wired(source):
+    """The rarity import line carries lightning_mint_price so the
+    JIT-floor wiring in mint_lightning cannot silently regress."""
+    assert (
+        "from terramon.domain.rarity import Rarity, lightning_mint_price"
+        in source
+    ), "terramon_tma.py import line missing lightning_mint_price"
 
 
 def test_card_lightning_mint_button(source):

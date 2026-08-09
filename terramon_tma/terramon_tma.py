@@ -54,7 +54,7 @@ from terramon.application.game_loop import GameLoop, TurnResult
 from terramon.application.geo_tournament import GeoTournamentService
 from terramon.application.summon_service import SummonService
 from terramon.domain.progress import PlayerProgress, XP_BY_RARITY
-from terramon.domain.rarity import Rarity
+from terramon.domain.rarity import Rarity, lightning_mint_price
 from terramon.domain.thought_seed import ThoughtSeed
 from terramon.events.bus import EventBus
 from terramon.application.insight_engine import _scores, _THEMES
@@ -1641,9 +1641,12 @@ class TerramonState(rx.State):
         if not _ALBY.url or not _ALBY.api_key:
             self.agent_message = "⚡ Lightning not configured yet — use Stars for now."
             return
-        # Creature price (NOT the fixed gate price — the mint area only shows
-        # when price_sats > 0, so the invoice always has a real amount).
-        price = self.price_sats
+        # Lightning rail invoices at the JIT-floor-clearing amount via
+        # lightning_mint_price (>= LIGHTNING_MIN_MINT_SATS, above the Alby
+        # Hub 2501-sat JIT floor) — NOT the raw Stars-typed price_sats.
+        # (The mint area renders only when price_sats > 0, so free tiers
+        # never reach this rail.)
+        price = lightning_mint_price(self.price_sats)
         self.lightning_price = price
         try:
             req = _ALBY.create_payment(price, f"Terramon mint · {self.agent}")
