@@ -134,6 +134,13 @@ _MEMORY = JsonMemory(_MEMORY_PATH)
 # OPTIMISTICALLY on click (see mint_creature); Lightning mints on settle.
 _STARS_INVOICE_URL = "https://t.me/terramon_bot/TERRAMON_STAR_INVOICE"
 
+# F3 gate: price to summon AGAIN after the free first summon. This is a
+# FIXED gate price (independent of the current creature's rarity tier) —
+# previously the gate showed price_sats of the LAST summoned creature, which
+# was 0 for free tiers, so 'Pay with Lightning' clicked and did nothing.
+GATE_SUMMON_PRICE_SATS = 3000  # Lightning rail (>= Alby JIT floor 2501)
+GATE_SUMMON_STARS = 1          # Telegram Stars rail
+
 # GameLoop owns progression + reflection; SummonService persists each turn.
 _SERVICE = SummonService(
     classifier=_CLASSIFIER,
@@ -1600,11 +1607,9 @@ class TerramonState(rx.State):
         if not _ALBY.url or not _ALBY.api_key:
             self.agent_message = "⚡ Lightning not configured yet — use Stars for now."
             return
-        from terramon.domain.rarity import lightning_mint_price
-        price = lightning_mint_price(int(self.price_sats))
-        if price <= 0:
-            self.agent_message = "⚡ This creature is free — no mint needed."
-            return
+        # F3 gate price: fixed summon-again price, NOT the last creature's tier
+        # (which is 0 for free tiers → the button previously did nothing).
+        price = GATE_SUMMON_PRICE_SATS
         self.lightning_price = price
         try:
             req = _ALBY.create_payment(price, f"Terramon summon · {self.thought[:40]}")
@@ -3264,7 +3269,7 @@ def payment_gate() -> rx.Component:
             rx.button(
                 rx.hstack(
                     rx.text("⚡", font_size="1em"),
-                    rx.text("Pay with Lightning · " + TerramonState.price_sats.to_string() + " sats",
+                    rx.text("Pay with Lightning · " + str(GATE_SUMMON_PRICE_SATS) + " sats",
                             font_size="0.8em"),
                     spacing="1",
                 ),
