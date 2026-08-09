@@ -195,7 +195,24 @@ def test_lightning_invoice_panel_shared(source):
     assert 'TerramonState.lightning_invoice != ""' in panel, (
         "panel is not self-gating on lightning_invoice"
     )
-    assert "api.qrserver.com" in panel, "panel lost the BOLT11 QR image"
+    # iter-15: BOLT11 must never leave the device — QR is generated locally.
+    assert "api.qrserver.com" not in source, (
+        "panel must not leak BOLT11 to external QR service"
+    )
+    # The panel renders the local segno data-URI, filled from the
+    # module-level _qr_data_uri helper when an invoice is created.
+    assert "_qr_data_uri" in source, (
+        "local QR helper _qr_data_uri missing from the module — локальный "
+        "QR (segno) не реализован"
+    )
+    assert "self.lightning_qr = _qr_data_uri(" in source, (
+        "lightning_qr is not filled from the local _qr_data_uri helper — "
+        "BOLT11 QR не генерируется локально"
+    )
+    assert "TerramonState.lightning_qr" in panel, (
+        "panel does not render TerramonState.lightning_qr — local QR "
+        "data-URI не подключён к rx.image"
+    )
     assert "on_click=TerramonState.verify_lightning" in panel
     assert "on_click=TerramonState.pay_lightning" in panel
 
@@ -215,6 +232,54 @@ def test_gate_keeps_lightning_wiring(source):
 
 def test_health_tests_count(source):
     """(e) /health reports the synced pytest count."""
-    assert '"tests": 414' in source, (
-        "health endpoint pytest count not synced to 414"
+    assert '"tests": 421' in source, (
+        "health endpoint pytest count not synced to 421"
+    )
+
+
+def _state_class_region(source: str) -> str:
+    """Body of the TerramonState class: from its ``class TerramonState(``
+    line up to the next top-level def. Located by NAME, never by line
+    number (the file is edited in parallel)."""
+    lines = source.splitlines()
+    start = next(
+        (i for i, ln in enumerate(lines) if ln.startswith("class TerramonState(")),
+        None,
+    )
+    if start is None:
+        pytest.fail("class 'TerramonState(' not found in source")
+    end = next(
+        (i for i in range(start + 1, len(lines)) if re.match(r"^def ", lines[i])),
+        len(lines),
+    )
+    return "\n".join(lines[start:end])
+
+
+def test_local_segno_qr_wiring(source):
+    """iter-15: the BOLT11 QR is generated LOCALLY with segno
+    (segno.make_qr('lightning:' + invoice).png_data_uri(scale=4)) and the
+    panel renders the resulting data-URI from the lightning_qr state var —
+    no BOLT11 ever leaves the device for an external QR service."""
+    assert "import segno" in source, (
+        "no 'import segno' in source — локальный QR-генератор не подключён"
+    )
+    assert (
+        'segno.make_qr("lightning:" + invoice).png_data_uri(scale=4)' in source
+    ), (
+        "_qr_data_uri must build the QR via "
+        'segno.make_qr("lightning:" + invoice).png_data_uri(scale=4)'
+    )
+    state = _state_class_region(source)
+    assert 'lightning_qr: str = ""' in state, (
+        "TerramonState missing the 'lightning_qr: str = \"\"' state var — "
+        "локальный QR data-URI не объявлен в классе состояния"
+    )
+
+
+def test_no_external_qr_service_anywhere(source):
+    """iter-15: api.qrserver.com must be GONE from the whole module — the
+    BOLT11 invoice is rendered only via the local segno QR data-URI."""
+    assert "api.qrserver.com" not in source, (
+        "external QR service api.qrserver.com still referenced somewhere — "
+        "BOLT11 уходит во внешний сервис"
     )

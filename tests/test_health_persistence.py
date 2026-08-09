@@ -172,3 +172,25 @@ def test_health_reports_data_persisted(source):
     assert "data_persisted = False" in health, (
         "health() except branch does not fall back to data_persisted = False"
     )
+
+
+# ── 6: DATA_PERSISTED is age-based (memory older than the boot marker) ──
+
+
+def test_data_persisted_age_based(source):
+    """iter-15: DATA_PERSISTED must be TRUE only when the memory file is
+    OLDER than the current boot marker (st_mtime comparison) — the marker's
+    mere existence is not enough, because every boot rewrites it."""
+    region = _boot_marker_region(source)
+    assert "_MEMORY_PATH.stat().st_mtime" in region, (
+        "boot-marker block does not stat _MEMORY_PATH via st_mtime — "
+        "возраст файла памяти не проверяется"
+    )
+    assert "_BOOT_MARKER.stat().st_mtime" in region, (
+        "boot-marker block does not stat _BOOT_MARKER via st_mtime — "
+        "возраст boot-маркера не сравнивается"
+    )
+    assert "DATA_PERSISTED = _data_older" in region, (
+        "DATA_PERSISTED must be assigned from the age comparison "
+        "(_data_older) — одного существования маркера недостаточно"
+    )

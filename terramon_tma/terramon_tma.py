@@ -43,6 +43,8 @@ log = logging.getLogger("terramon")
 import reflex as rx
 from pathlib import Path
 
+import segno
+
 from terramon.adapters.embedding_classifier import EmbeddingClassifier
 from terramon.adapters.alby_hub_adapter import AlbyHubAdapter
 from terramon.adapters.json_memory import JsonMemory
@@ -169,7 +171,21 @@ try:
         )
     )
     os.replace(_boot_tmp, _BOOT_MARKER)
-    DATA_PERSISTED = _boot_survived
+    # Age-based honesty (iter-15): the marker alone is a false positive when
+    # the data dir is wiped between boots (marker survives, memory gone).
+    # DATA_PERSISTED only when a REAL data file from a previous boot exists —
+    # i.e. its mtime predates this boot's freshly written marker.
+    if _boot_survived:
+        try:
+            _data_older = (
+                _MEMORY_PATH.exists()
+                and _MEMORY_PATH.stat().st_mtime < _BOOT_MARKER.stat().st_mtime
+            )
+            DATA_PERSISTED = _data_older
+        except Exception:
+            DATA_PERSISTED = False
+    else:
+        DATA_PERSISTED = False
 except Exception as _boot_err:  # best-effort: never crash the app on marker I/O
     DATA_PERSISTED = False
     log.warning(
@@ -326,6 +342,7 @@ class TerramonState(rx.State):
     unlocked: bool = False  # becomes True after payment/unlock
     # Lightning (BTC-first): current BOLT11 invoice + its hub id
     lightning_invoice: str = ""      # BOLT11 string shown to player
+    lightning_qr: str = ""           # local data-URI QR for the current BOLT11 invoice
     lightning_price: int = 0         # actual sats price (>= LIGHTNING_MIN_MINT_SATS)
     lightning_ref: str = ""          # hub invoice id for verification
     lightning_checking: bool = False  # in-flight verify flag
@@ -1684,6 +1701,10 @@ class TerramonState(rx.State):
         try:
             req = _ALBY.create_payment(price, f"Terramon mint · {self.agent}")
             self.lightning_invoice = req.destination
+            try:
+                self.lightning_qr = _qr_data_uri(req.destination)
+            except Exception:
+                self.lightning_qr = ""
             self.lightning_ref = req.verification_ref
             self.lightning_checking = False
             self.agent_message = f"⚡ Invoice ready: {price} sats. Pay with any Lightning wallet."
@@ -1795,6 +1816,10 @@ class TerramonState(rx.State):
         try:
             req = _ALBY.create_payment(price, f"Terramon summon · {self.thought[:40]}")
             self.lightning_invoice = req.destination
+            try:
+                self.lightning_qr = _qr_data_uri(req.destination)
+            except Exception:
+                self.lightning_qr = ""
             self.lightning_ref = req.verification_ref
             self.lightning_checking = False
             self.agent_message = f"⚡ Invoice ready: {price} sats. Pay with any Lightning wallet."
@@ -3147,6 +3172,11 @@ def earth_map() -> rx.Component:
     )
 
 
+def _qr_data_uri(invoice: str) -> str:
+    """BOLT11 QR as a local data URI (lightning: URI scheme). No third-party QR API."""
+    return segno.make_qr("lightning:" + invoice).png_data_uri(scale=4)
+
+
 def _lightning_invoice_panel() -> rx.Component:
     """F3/M7 — shared Lightning invoice flow panel (BOLT11 QR + verify).
 
@@ -3159,11 +3189,17 @@ def _lightning_invoice_panel() -> rx.Component:
     return rx.cond(
         TerramonState.lightning_invoice != "",
         rx.vstack(
-            rx.image(
-                src="https://api.qrserver.com/v1/create-qr-code/?size=180x180&data="
-                    + TerramonState.lightning_invoice,
-                width="180px", height="180px",
-                border_radius="8px", background="#fff", padding="4px",
+            rx.cond(
+                TerramonState.lightning_qr != "",
+                rx.image(
+                    src=TerramonState.lightning_qr,
+                    width="180px", height="180px",
+                    border_radius="8px", background="#fff", padding="4px",
+                ),
+                rx.text(
+                    "QR unavailable — pay via BOLT11 below",
+                    font_size="0.6em", color="#6b7280",
+                ),
             ),
             rx.text(
                 "Pay ⚡ " + TerramonState.lightning_price.to_string() + " sats with any Lightning wallet",
@@ -4042,7 +4078,7 @@ def health(request):
         alby_configured = False
     return JSONResponse({
         "status": "ok",
-        "tests": 414,  # pytest count, synced at iter-13 (5 persistence guards added)
+        "tests": 421,  # pytest count, synced at iter-15 (segno QR + age-based persistence guards)
         "data_persisted": data_persisted,
         "mint_count": mint_count,
         "seed_count": seed_count,
