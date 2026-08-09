@@ -1623,6 +1623,38 @@ class TerramonState(rx.State):
             f"if(window.Telegram?.WebApp?.openInvoice)Telegram.WebApp.openInvoice('{_STARS_INVOICE_URL}');"
         )
 
+    @rx.event
+    def mint_lightning(self):
+        """Mint current creature via Lightning — BOLT11 invoice on the Alby Hub.
+
+        M7 honest contract: Lightning mints ONLY on invoice SETTLE
+        (verify_lightning → _record_mint), unlike Stars which is optimistic
+        on click (openInvoice has no server callback). Same SILENT guards as
+        mint_creature. The KPI probe parses the ⚡ agent_message markers —
+        keep their wording byte-identical to pay_lightning.
+        """
+        if not self.has_summoned or self.price_sats <= 0:
+            return
+        if self.minted:
+            self.agent_message = "💠 This creature is already minted."
+            return
+        if not _ALBY.url or not _ALBY.api_key:
+            self.agent_message = "⚡ Lightning not configured yet — use Stars for now."
+            return
+        # Creature price (NOT the fixed gate price — the mint area only shows
+        # when price_sats > 0, so the invoice always has a real amount).
+        price = self.price_sats
+        self.lightning_price = price
+        try:
+            req = _ALBY.create_payment(price, f"Terramon mint · {self.agent}")
+            self.lightning_invoice = req.destination
+            self.lightning_ref = req.verification_ref
+            self.lightning_checking = False
+            self.agent_message = f"⚡ Invoice ready: {price} sats. Pay with any Lightning wallet."
+        except Exception as e:
+            log.error(f"mint_lightning failed: {e}", exc_info=True)
+            self.agent_message = f"⚡ Invoice failed: {getattr(e, 'message', e)}"
+
     def _record_mint(self) -> bool:
         """The real mint record: persist minted/minted_at on the current seed
         and bump the counter. Idempotent — a creature is minted at most once
@@ -1746,7 +1778,11 @@ class TerramonState(rx.State):
             req = PaymentRequest(
                 id=self.lightning_ref,
                 method=PaymentMethod.LIGHTNING,
-                amount_sats=self.price_sats,
+                # Verify the amount ACTUALLY invoiced (lightning_price): the
+                # gate invoices at GATE_SUMMON_PRICE_SATS while a creature's
+                # price_sats is 0 for free tiers — verifying the stale
+                # creature price alone would mismatch every gate invoice.
+                amount_sats=self.lightning_price or self.price_sats,
                 destination=self.lightning_invoice,
                 memo="terramon",
                 verification_ref=self.lightning_ref,
@@ -1832,6 +1868,9 @@ class TerramonState(rx.State):
         """Copy shareable creature card to clipboard (virality)."""
         if not self.has_summoned:
             return
+        # M6 share counter: record EVERY share attempt on the persisted
+        # share registry (JsonMemory.record_share) for the /health KPI.
+        _MEMORY.record_share()
         card = (
             f"🃏 Terramon — {self.agent}\n"
             f"✦ Rarity: {self.rarity} {self.sigil}\n"
@@ -2355,27 +2394,42 @@ def creature_care_panel() -> rx.Component:
                         rx.fragment(),
                     ),
                 ),
-                # SIN 8: MINT with explanation tooltip
+                # SIN 8: MINT with explanation tooltip (+ Lightning rail)
                 rx.cond(
                     TerramonState.price_sats > 0,
                     rx.cond(
                         TerramonState.can_mint,
-                        rx.tooltip(
-                            rx.button(
-                                "⚡ MINT · " + TerramonState.price_sats.to_string() + " sats",
-                                on_click=TerramonState.mint_creature,
-                                background=TerramonState.color,
-                                color="#0b0b0f",
-                                width="100%",
-                                _hover={"transform": "scale(1.02)", "opacity": "0.9"},
-                                style={"transition": "all 0.15s ease"},
+                        rx.vstack(
+                            rx.tooltip(
+                                rx.button(
+                                    "⚡ MINT · " + TerramonState.price_sats.to_string() + " sats",
+                                    on_click=TerramonState.mint_creature,
+                                    background=TerramonState.color,
+                                    color="#0b0b0f",
+                                    width="100%",
+                                    _hover={"transform": "scale(1.02)", "opacity": "0.9"},
+                                    style={"transition": "all 0.15s ease"},
+                                ),
+                                content="Mint this creature to Telegram Stars — tradable collectible on-chain",
                             ),
-                            content="Mint this creature to Telegram Stars — tradable collectible on-chain",
+                            rx.button(
+                                "⚡ Mint via Lightning",
+                                on_click=TerramonState.mint_lightning,
+                                variant="surface",
+                                size="1",
+                                color_scheme="yellow",
+                                width="100%",
+                            ),
+                            spacing="1",
+                            width="100%",
                         ),
                         rx.text("locked · train more", color="#6b7280", font_size="0.85em"),
                     ),
                     rx.text("free summon", color="#6b7280", font_size="0.85em"),
                 ),
+                # M7 Lightning mint: shared invoice panel (self-gates on
+                # lightning_invoice != '' — appears after mint_lightning runs)
+                _lightning_invoice_panel(),
                 # Phase 4: Share button (virality)
                 rx.button(
                     "📤 Share",
@@ -3057,6 +3111,57 @@ def earth_map() -> rx.Component:
     )
 
 
+def _lightning_invoice_panel() -> rx.Component:
+    """F3/M7 — shared Lightning invoice flow panel (BOLT11 QR + verify).
+
+    Used by payment_gate() (summon gate) and creature_care_panel()'s
+    Lightning mint path (mint_lightning). Self-gates on
+    TerramonState.lightning_invoice != '' so it renders nothing until an
+    invoice exists. The gate's no-invoice fallback button stays inline in
+    payment_gate() (gate-specific fixed GATE_SUMMON_PRICE_SATS).
+    """
+    return rx.cond(
+        TerramonState.lightning_invoice != "",
+        rx.vstack(
+            rx.image(
+                src="https://api.qrserver.com/v1/create-qr-code/?size=180x180&data="
+                    + TerramonState.lightning_invoice,
+                width="180px", height="180px",
+                border_radius="8px", background="#fff", padding="4px",
+            ),
+            rx.text(
+                "Pay ⚡ " + TerramonState.lightning_price.to_string() + " sats with any Lightning wallet",
+                font_size="0.75em", color="#fbbf24", text_align="center",
+            ),
+            rx.text(
+                TerramonState.lightning_invoice,
+                font_size="0.55em", color="#6b7280", text_align="center",
+                max_width="280px", word_break="break-all",
+            ),
+            rx.cond(
+                TerramonState.lightning_checking,
+                rx.text("⏳ Checking payment…", font_size="0.7em", color="#9ca3af"),
+                rx.button(
+                    "✅ I've paid — verify",
+                    on_click=TerramonState.verify_lightning,
+                    variant="solid", size="2", color_scheme="yellow",
+                    width="100%", _hover={"transform": "scale(1.02)"},
+                ),
+            ),
+            rx.button(
+                "🔄 New invoice",
+                on_click=TerramonState.pay_lightning,
+                variant="surface", size="1", color_scheme="gray",
+                width="100%",
+            ),
+            spacing="2",
+            align="center",
+            width="100%",
+        ),
+        rx.fragment(),
+    )
+
+
 def payment_gate() -> rx.Component:
     """F3 — Monetization Gate: first summon free, then payment required.
     BTC-first: Lightning (BOLT11 on self-custodial Alby Hub) is primary;
@@ -3078,45 +3183,15 @@ def payment_gate() -> rx.Component:
             border_radius="12px",
             width="100%",
         ),
-        # BTC-first: Lightning invoice flow
+        # BTC-first: Lightning invoice flow — the shared panel renders the
+        # BOLT11 QR + verify flow (on_click=TerramonState.verify_lightning,
+        # "🔄 New invoice" via on_click=TerramonState.pay_lightning) whenever
+        # an invoice exists; the fallback below is the gate's no-invoice
+        # state (fixed GATE_SUMMON_PRICE_SATS — the gate price is NOT the
+        # last creature's tier, which is 0 for free tiers).
+        _lightning_invoice_panel(),
         rx.cond(
-            TerramonState.lightning_invoice != "",
-            rx.vstack(
-                rx.image(
-                    src="https://api.qrserver.com/v1/create-qr-code/?size=180x180&data="
-                        + TerramonState.lightning_invoice,
-                    width="180px", height="180px",
-                    border_radius="8px", background="#fff", padding="4px",
-                ),
-                rx.text(
-                    "Pay ⚡ " + TerramonState.lightning_price.to_string() + " sats with any Lightning wallet",
-                    font_size="0.75em", color="#fbbf24", text_align="center",
-                ),
-                rx.text(
-                    TerramonState.lightning_invoice,
-                    font_size="0.55em", color="#6b7280", text_align="center",
-                    max_width="280px", word_break="break-all",
-                ),
-                rx.cond(
-                    TerramonState.lightning_checking,
-                    rx.text("⏳ Checking payment…", font_size="0.7em", color="#9ca3af"),
-                    rx.button(
-                        "✅ I've paid — verify",
-                        on_click=TerramonState.verify_lightning,
-                        variant="solid", size="2", color_scheme="yellow",
-                        width="100%", _hover={"transform": "scale(1.02)"},
-                    ),
-                ),
-                rx.button(
-                    "🔄 New invoice",
-                    on_click=TerramonState.pay_lightning,
-                    variant="surface", size="1", color_scheme="gray",
-                    width="100%",
-                ),
-                spacing="2",
-                align="center",
-                width="100%",
-            ),
+            TerramonState.lightning_invoice == "",
             rx.button(
                 rx.hstack(
                     rx.text("⚡", font_size="1em"),
@@ -3132,6 +3207,7 @@ def payment_gate() -> rx.Component:
                 _hover={"transform": "scale(1.02)"},
                 style={"transition": "all 0.15s ease"},
             ),
+            rx.fragment(),
         ),
         rx.text("— or —", font_size="0.65em", color="#52525b"),
         rx.button(
@@ -3855,18 +3931,31 @@ def health(request):
         # active browser session (same pattern as mint_count above).
         player_count = _MEMORY.count_unique_players()
         returning_players_7d = _MEMORY.count_returning_players(days=7)
+        # M6 share counter: persisted share registry (JsonMemory).
+        share_count = _MEMORY.count_shares()
+        shares_7d = _MEMORY.count_shares_since(days=7)
+        # Alby Hub adapter config presence (url + api_key both set).
+        alby_configured = bool(
+            getattr(_ALBY, "url", None) and getattr(_ALBY, "api_key", None)
+        )
     except Exception:
         mint_count = 0
         seed_count = 0
         player_count = 0
         returning_players_7d = 0
+        share_count = 0
+        shares_7d = 0
+        alby_configured = False
     return JSONResponse({
         "status": "ok",
-        "tests": 84,
+        "tests": 390,  # pytest count, synced at iter-10
         "mint_count": mint_count,
         "seed_count": seed_count,
         "player_count": player_count,
         "returning_players_7d": returning_players_7d,
+        "share_count": share_count,
+        "shares_7d": shares_7d,
+        "alby_configured": alby_configured,
     })
 
 

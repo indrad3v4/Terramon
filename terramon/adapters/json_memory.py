@@ -82,15 +82,28 @@ _INDEX_TS = "CREATE INDEX IF NOT EXISTS idx_seeds_timestamp ON seeds(timestamp)"
 
 
 class JsonMemory(MemoryPort):
-    """Stores thought seeds as newline-delimited JSON records."""
+    """Stores thought seeds as newline-delimited JSON records.
 
-    def __init__(self, path: Path | str, players_path: Path | str | None = None) -> None:
+    Also hosts append-only JSONL side registries: players.jsonl (player
+    identity) and shares.jsonl (M6 share-funnel counter).
+    """
+
+    def __init__(
+        self,
+        path: Path | str,
+        players_path: Path | str | None = None,
+        shares_path: Path | str | None = None,
+    ) -> None:
         """Open or create the memory file at ``path``.
 
         ``players_path`` — where the player registry lives (defaults to a
         ``players.jsonl`` sibling of ``path``). Kept separate from the seeds
         stream so /health can read unique/returning player counts without
         parsing creature records.
+
+        ``shares_path`` — where the M6 share-funnel counter lives (defaults
+        to a ``shares.jsonl`` sibling of ``path``). Append-only JSONL of
+        share taps; created lazily on the first ``record_share``.
         """
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -104,6 +117,14 @@ class JsonMemory(MemoryPort):
         self.players_path.parent.mkdir(parents=True, exist_ok=True)
         if not self.players_path.exists():
             self.players_path.write_text("", encoding="utf-8")
+        self.shares_path = (
+            Path(shares_path)
+            if shares_path is not None
+            else self.path.with_name("shares.jsonl")
+        )
+        # The shares file itself is created lazily on the first record_share
+        # (a share tap is best-effort; an empty registry needs no file).
+        self.shares_path.parent.mkdir(parents=True, exist_ok=True)
 
     def save_seed(self, seed: ThoughtSeed) -> None:
         """Append one thought seed to the memory file."""
@@ -636,6 +657,83 @@ class JsonMemory(MemoryPort):
             for p in self.load_players()
             if p.session_count > 1 and p.last_seen_at >= cutoff
         )
+
+    # ------------------------------------------------------------------
+    # Share registry (shares.jsonl) — M6 share-funnel counter. Append-only
+    # JSONL mirroring the players registry: one record per share tap,
+    # corrupt lines are skipped on read. Lazily created on first tap.
+    # ------------------------------------------------------------------
+    def record_share(self, now: float | None = None) -> None:
+        """Record one share-funnel tap.
+
+        Appends a single JSON line (``ts`` epoch seconds + ``iso`` UTC
+        timestamp) to shares.jsonl. Best-effort, same style as save_seed:
+        on I/O failure the error is logged and the caller continues — a
+        metrics tap must never crash the game flow.
+        """
+        import time as _time
+        from datetime import datetime, timezone
+
+        ts = now if now is not None else _time.time()
+        record = {
+            "ts": ts,
+            "iso": datetime.fromtimestamp(ts, timezone.utc).isoformat(),
+        }
+        self.shares_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with self.shares_path.open("a", encoding="utf-8") as file:
+                file.write(json.dumps(record, ensure_ascii=False) + "\n")
+        except (OSError, IOError) as exc:
+            log.error("Failed to record share in %s: %s", self.shares_path, exc)
+
+    def count_shares(self) -> int:
+        """Total share taps ever recorded (valid JSON lines only).
+
+        Corrupt lines are logged at debug and skipped, exactly like the
+        players loader skips bad records.
+        """
+        if not self.shares_path.exists():
+            return 0
+        raw = self.shares_path.read_text(encoding="utf-8")
+        total = 0
+        for idx, line in enumerate(raw.splitlines(), start=1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                json.loads(line)
+            except json.JSONDecodeError as exc:
+                log.debug(
+                    "Corrupt share line %d in %s: %s — skipping",
+                    idx, self.shares_path, exc,
+                )
+                continue
+            total += 1
+        return total
+
+    def count_shares_since(self, days: int = 7) -> int:
+        """Share taps recorded within the last ``days`` days.
+
+        A line counts when its ``ts`` (epoch seconds) is >= now - days*86400.
+        Corrupt lines are skipped silently; a missing file counts as zero.
+        """
+        import time as _time
+
+        cutoff = _time.time() - days * 86400
+        if not self.shares_path.exists():
+            return 0
+        total = 0
+        for line in self.shares_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+                if float(record.get("ts", 0.0)) >= cutoff:
+                    total += 1
+            except (json.JSONDecodeError, TypeError, ValueError):
+                continue
+        return total
 
 
 # ======================================================================

@@ -146,3 +146,50 @@ def test_health_mint_counter_source(source):
     assert start is not None, "top-level 'def health(' not found in source"
     tail = "\n".join(lines[start:])
     assert "mint_count" in tail, "mint_count not read in health endpoint"
+
+
+def test_health_share_counter_source(source):
+    """The health KPI endpoint must expose the M6 share counter fields:
+    `share_count` / `shares_7d` from the persisted JsonMemory share
+    registry, plus `alby_configured` from the Alby adapter config."""
+    lines = source.splitlines()
+    start = next(
+        (i for i, ln in enumerate(lines) if ln.startswith("def health(")),
+        None,
+    )
+    assert start is not None, "top-level 'def health(' not found in source"
+    tail = "\n".join(lines[start:])
+    assert "share_count" in tail, "share_count not exposed in health endpoint"
+    assert "alby_configured" in tail, "alby_configured not exposed in health endpoint"
+    assert "count_shares" in tail, (
+        "share counter not read from _MEMORY in health endpoint"
+    )
+
+
+def test_share_creature_records_share_source(source):
+    """share_creature() must record every share attempt on the persisted
+    registry (_MEMORY.record_share) — the M6 KPI counter's source of
+    truth. Must fire AFTER the has_summoned guard, before the clipboard
+    copy so unsummoned no-ops never inflate the count."""
+    lines = source.splitlines()
+    start = next(
+        (
+            i
+            for i, ln in enumerate(lines)
+            if ln.lstrip().startswith("def share_creature(")
+        ),
+        None,
+    )
+    assert start is not None, "def share_creature( not found in source"
+    tail = "\n".join(lines[start:])
+    assert "_MEMORY.record_share()" in tail, (
+        "share not recorded via _MEMORY.record_share() in share_creature()"
+    )
+    # Ordering lock-in: guard -> record_share -> set_clipboard.
+    guard_idx = tail.index("if not self.has_summoned:")
+    record_idx = tail.index("_MEMORY.record_share()")
+    clip_idx = tail.index("rx.set_clipboard")
+    assert guard_idx < record_idx < clip_idx, (
+        "record_share must run after the has_summoned guard and before "
+        "the clipboard copy"
+    )
