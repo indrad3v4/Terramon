@@ -280,6 +280,7 @@ class TerramonState(rx.State):
     summoning: bool = False  # animation flag (SIN 1 fix: loading state)
     evolve_animating: bool = False  # evolution animation flag (set by evolve_agent)
     celebration_dismissed: bool = False  # F2: Tamer Unlock celebration dismissed
+    celebration_pending: bool = False  # F2: session-only — goal JUST reached in THIS session (never hydrated)
 
     # B1: LLM-generated creature greeting on summon
     creature_greeting: str = ""
@@ -566,7 +567,7 @@ class TerramonState(rx.State):
         # anchored to a real place. Reflex 0.9.x: the call_script result is
         # delivered to callback= (not via yield), so we defer the summon:
         # store the thought, request coords, _on_coords re-runs summon().
-        if self.summon_count == 0 and self.geo_status == "":
+        if self.geo_status == "":
             self.pending_thought = text
             self.summoning = False
             self.agent_message = "📍 Закрепи свою мысль на планете — разреши геолокацию"
@@ -613,7 +614,10 @@ class TerramonState(rx.State):
             self.distinct = _LOOP.progress.distinct_count
             self.goal = _LOOP.progress.goal_distinct
             self.summon_streak = _LOOP.progress.summon_streak
+            prev_goal = self.goal_reached
             self.goal_reached = result.goal_reached
+            if result.goal_reached and not prev_goal:
+                self.celebration_pending = True
             self.has_summoned = True
             self.summon_count += 1
             # Candle ritual: a new creature starts unlit — clear the previous
@@ -649,6 +653,10 @@ class TerramonState(rx.State):
                 self.geo_lat, self.geo_lon = g.lat, g.lon
                 if g.place_name or (g.lat != 0.0 or g.lon != 0.0):
                     self.geo_status = "granted"
+            elif seeds and (seeds[-1].lat or seeds[-1].lon):
+                self.agent_lat, self.agent_lon = seeds[-1].lat, seeds[-1].lon
+                self.place = seeds[-1].place_name or f"{seeds[-1].lat:.2f}, {seeds[-1].lon:.2f}"
+                self.geo_status = "granted"
         except Exception as e:
             log.error(f"take_turn failed: {e}", exc_info=True)
             # Anti-stall guard: ALWAYS clear the flag and return a graceful
@@ -893,6 +901,13 @@ class TerramonState(rx.State):
         # G05 geolocation) — the game never blocks on it: absent/invalid
         # initData simply leaves the session anonymous.
         yield rx.call_script(_INITDATA_JS, callback=TerramonState.on_init_data)
+        # F2: restore celebration-dismissed from localStorage (browser-storage
+        # pattern) so returning players who already celebrated never see the
+        # full-screen overlay again. celebration_pending stays False here.
+        yield rx.call_script(
+            "localStorage.getItem('terramon_celebration_dismissed')",
+            callback=TerramonState.on_celebration_restore,
+        )
         # Candle ritual: start unlit; the seed sync below restores the lit
         # state for an already-released creature with a persisted candle.
         self.released_just_now = False
@@ -1150,7 +1165,17 @@ class TerramonState(rx.State):
     @rx.event
     def dismiss_celebration(self):
         """Dismiss the TERRA AWAKENED celebration overlay (F2)."""
+        self.celebration_pending = False
         self.celebration_dismissed = True
+        yield rx.call_script("localStorage.setItem('terramon_celebration_dismissed','1')")
+
+    @rx.event
+    def on_celebration_restore(self, result):
+        """F2: callback of the load_terra localStorage.getItem restore."""
+        try:
+            self.celebration_dismissed = result == "1"
+        except Exception as e:
+            log.warning(f"celebration restore failed: {e}")
 
     # ── Tamagotchi×Pokemon interaction handlers ───────────
 
@@ -3723,7 +3748,7 @@ def index() -> rx.Component:
 
                 # ── F2: Tamer Unlock celebration overlay ──
                 rx.cond(
-                    TerramonState.goal_reached,
+                    TerramonState.celebration_pending,
                     rx.cond(
                         TerramonState.celebration_dismissed,
                         rx.fragment(),
@@ -3821,6 +3846,7 @@ def health(request):
     """
     from starlette.responses import JSONResponse
     try:
+        seed_count = len(_MEMORY.load_all_seeds())
         mint_count = sum(
             1 for s in _MEMORY.load_all_seeds() if getattr(s, "minted", False)
         )
@@ -3831,12 +3857,14 @@ def health(request):
         returning_players_7d = _MEMORY.count_returning_players(days=7)
     except Exception:
         mint_count = 0
+        seed_count = 0
         player_count = 0
         returning_players_7d = 0
     return JSONResponse({
         "status": "ok",
         "tests": 84,
         "mint_count": mint_count,
+        "seed_count": seed_count,
         "player_count": player_count,
         "returning_players_7d": returning_players_7d,
     })
