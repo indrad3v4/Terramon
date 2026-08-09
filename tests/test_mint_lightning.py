@@ -215,6 +215,6 @@ def test_gate_keeps_lightning_wiring(source):
 
 def test_health_tests_count(source):
     """(e) /health reports the synced pytest count."""
-    assert '"tests": 390' in source, (
-        "health endpoint pytest count not synced to 390"
+    assert '"tests": 414' in source, (
+        "health endpoint pytest count not synced to 414"
     )

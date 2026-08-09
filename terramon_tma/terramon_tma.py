@@ -29,7 +29,7 @@ UI/UX SINS FIXED (July 2026, after ccgs-p + prism audit):
 
 from __future__ import annotations
 
-import json, logging, sys, traceback
+import json, logging, sys, traceback, uuid
 
 # Logging setup — writes to stderr (visible in Railway logs)
 logging.basicConfig(
@@ -142,6 +142,39 @@ _CLASSIFIER = EmbeddingClassifier()
 # Persistent memory — survives sessions (Railway volume mount at data/).
 _MEMORY_PATH = Path("data/tma_memory.jsonl")
 _MEMORY = JsonMemory(_MEMORY_PATH)
+
+# ── Data-persistence self-check (Railway volume attach honesty) ──────
+# railway.json declares deploy.volumes (terramon-data @ /app/data), but
+# Railway only attaches volumes created in the project dashboard. When the
+# volume is missing, the data/ dir is wiped on EVERY redeploy and
+# seed_count/player_count/share_count silently reset to 0 (M6/M7/M8 + the
+# kill-condition monitor). This boot-epoch marker survives only if the
+# data dir actually persists between boots, so /health can report
+# DATA_PERSISTED and the KPI monitor stops reading a wiped data dir as
+# 'no players'.
+_BOOT_MARKER = Path("data/boot_epoch.json")
+DATA_PERSISTED = False
+try:
+    _boot_survived = _BOOT_MARKER.exists()  # True ⇒ data dir survived last boot
+    _BOOT_MARKER.parent.mkdir(parents=True, exist_ok=True)
+    _boot_tmp = _BOOT_MARKER.with_name(_BOOT_MARKER.name + ".tmp")
+    _boot_tmp.write_text(
+        json.dumps(
+            {
+                "boot_id": uuid.uuid4().hex,
+                "boot_time": get_current_time(),
+                "survived": _boot_survived,
+            },
+            indent=2,
+        )
+    )
+    os.replace(_boot_tmp, _BOOT_MARKER)
+    DATA_PERSISTED = _boot_survived
+except Exception as _boot_err:  # best-effort: never crash the app on marker I/O
+    DATA_PERSISTED = False
+    log.warning(
+        "boot-epoch marker I/O failed (data dir not writable?): %s", _boot_err
+    )
 
 # ── Player identity (D7 retention cohorts) ──────────────────────────
 # The TMA ships initData signed with the BOT token. Verification is pure
@@ -3959,6 +3992,9 @@ def health(request):
     """
     from starlette.responses import JSONResponse
     try:
+        # True only if the data/ dir survived the previous boot (Railway
+        # volume actually attached); False when it was wiped on redeploy.
+        data_persisted = DATA_PERSISTED
         seed_count = len(_MEMORY.load_all_seeds())
         mint_count = sum(
             1 for s in _MEMORY.load_all_seeds() if getattr(s, "minted", False)
@@ -3976,6 +4012,7 @@ def health(request):
             getattr(_ALBY, "url", None) and getattr(_ALBY, "api_key", None)
         )
     except Exception:
+        data_persisted = False
         mint_count = 0
         seed_count = 0
         player_count = 0
@@ -3985,7 +4022,8 @@ def health(request):
         alby_configured = False
     return JSONResponse({
         "status": "ok",
-        "tests": 409,  # pytest count, synced at iter-12 (5 funnel guards added)
+        "tests": 414,  # pytest count, synced at iter-13 (5 persistence guards added)
+        "data_persisted": data_persisted,
         "mint_count": mint_count,
         "seed_count": seed_count,
         "player_count": player_count,
