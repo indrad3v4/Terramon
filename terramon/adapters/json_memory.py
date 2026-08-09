@@ -180,12 +180,21 @@ class JsonMemory(MemoryPort):
             # `created_at` duplicates `timestamp` for data-versioning queries
             # but is NOT a field on ThoughtSeed.
             record.pop("created_at", None)
+            # M7 mint loop: `minted`/`minted_at` are storage-only fields (not
+            # ThoughtSeed domain fields) — popped before construction, then
+            # re-attached so the mint record survives reloads and card/health
+            # readers can use getattr(seed, "minted", False).
+            minted_flag = bool(record.pop("minted", False))
+            minted_at = str(record.pop("minted_at", "") or "")
             # I03: Deserialize birth_embedding (string keys -> int) if present
             be_data = record.get("birth_embedding")
             if be_data is not None:
                 if isinstance(be_data, dict):
                     record["birth_embedding"] = {int(k): v for k, v in be_data.items()}
-            seeds.append(ThoughtSeed(**record))
+            seed = ThoughtSeed(**record)
+            setattr(seed, "minted", minted_flag)
+            setattr(seed, "minted_at", minted_at)
+            seeds.append(seed)
         return seeds
 
     def update_seed(
@@ -194,12 +203,16 @@ class JsonMemory(MemoryPort):
         raw_input: str,
         status: str | None = None,
         candle_lore: str | None = None,
+        minted: bool | None = None,
+        minted_at: str | None = None,
     ) -> bool:
         """In-place field update of the newest record matching (agent, thought).
 
         Used by the release + candle rituals to persist status/candle_lore
         on the creature seed (JSONL is append-only, so we rewrite the file
-        atomically). Returns True when a matching record was updated.
+        atomically). M7 mint loop: ``minted``/``minted_at`` persist the real
+        mint record (the creature became a collectible). Returns True when a
+        matching record was updated.
         """
         if not self.path.exists():
             return False
@@ -222,6 +235,10 @@ class JsonMemory(MemoryPort):
                     record["status"] = status
                 if candle_lore is not None:
                     record["candle_lore"] = candle_lore
+                if minted is not None:
+                    record["minted"] = bool(minted)
+                if minted_at is not None:
+                    record["minted_at"] = minted_at
                 lines[idx] = json.dumps(record, ensure_ascii=False)
                 changed = True
                 break
@@ -230,6 +247,54 @@ class JsonMemory(MemoryPort):
             tmp.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
             tmp.replace(self.path)
         return changed
+
+    def get_mint_state(self, summoned_agent: str, raw_input: str) -> tuple[bool, str]:
+        """Mint record (minted, minted_at) of the newest matching seed.
+
+        Raw JSONL read (not via load_all_seeds) so the mint fields survive
+        even though they are not ThoughtSeed domain fields. Returns
+        (False, "") when no record matches or no mint was recorded.
+        """
+        if not self.path.exists():
+            return False, ""
+        for line in reversed(self.path.read_text(encoding="utf-8").splitlines()):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if (
+                record.get("summoned_agent") == summoned_agent
+                and record.get("raw_input") == raw_input
+            ):
+                return bool(record.get("minted", False)), str(record.get("minted_at", "") or "")
+        return False, ""
+
+    def find_seed(
+        self, raw_input: str, summoned_agent: str | None = None
+    ) -> ThoughtSeed | None:
+        """Return the NEWEST seed matching (agent, thought), or None.
+
+        M4 dedup guard: called before a summon to check whether the exact
+        same thought already birthed a creature. The router is
+        deterministic (same input -> same agent), so raw_input equality
+        implies summoned_agent equality; the optional agent filter makes
+        the match explicit and future-proof against router changes.
+
+        This is the persistence-level guard that stops redeploy-created
+        duplicates: after a redeploy the in-memory collection resets, but
+        the seed file survives — a repeated summon of the same thought
+        must load the existing creature instead of appending a new seed.
+        """
+        seeds = self.load_all_seeds()
+        for s in reversed(seeds):
+            if s.raw_input == raw_input and (
+                summoned_agent is None or s.summoned_agent == summoned_agent
+            ):
+                return s
+        return None
 
     # ── Proximity search (G03: Haversine-based find_nearby) ─────────────────
 

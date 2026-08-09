@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
 import time
 import urllib.request
 from typing import Optional
@@ -47,6 +48,16 @@ VISION_MODEL = os.environ.get("TERRAMON_VISION_MODEL", "openai/gpt-4o-mini")
 
 # Sliding window: how many recent messages form the "conversation context"
 KV_CACHE_WINDOW = 6
+
+# HARD wall-clock deadline for ONE LLM HTTP call (seconds).
+# urllib's per-socket timeout does NOT cover DNS resolution (getaddrinfo can
+# hang forever) nor a slowloris server that trickles bytes — either would
+# stall the summon event handler indefinitely (KPI: server-side stall at
+# 01:27 — event ACK'd, state-update never arrived, console clean). Each call
+# runs in a daemon thread and is abandoned after this deadline; the caller
+# then falls back down the chain (Qwen -> template) so the summon ALWAYS
+# completes. Override with TERRAMON_LLM_TIMEOUT.
+LLM_HTTP_TIMEOUT = float(os.environ.get("TERRAMON_LLM_TIMEOUT", "25"))
 
 # Valid emotion labels for structured output
 _VALID_EMOTIONS = {"curious", "playful", "tired", "grateful", "excited"}
@@ -393,13 +404,53 @@ def _build_messages(agent: CreatureAgent, interaction: str, player_input: str = 
 
 
 # ---------------------------------------------------------------------------
+# Hard-deadline runner — the summon anti-stall primitive
+# ---------------------------------------------------------------------------
+
+def _run_with_deadline(fn, timeout: float, *args, **kwargs):
+    """Run ``fn(*args, **kwargs)`` with a HARD wall-clock deadline.
+
+    Returns ``(result, None)`` on success or ``(None, error)`` on failure.
+    If the deadline elapses while ``fn`` is still running, returns
+    ``(None, TimeoutError)`` and abandons the worker thread (daemon, so it
+    can never block the process). This is what makes the summon path
+    hang-proof: no DNS lookup, connect or read may stall the event handler
+    forever — worst case the LLM layer degrades to the template fallback
+    and the creature is still born.
+    """
+    box: dict = {}
+
+    def _run():
+        try:
+            box["result"] = fn(*args, **kwargs)
+        except Exception as e:  # noqa: BLE001 — any failure -> fallback chain
+            box["error"] = e
+
+    t = threading.Thread(target=_run, daemon=True, name="llm-deadline")
+    t.start()
+    t.join(timeout)
+    if t.is_alive():
+        return None, TimeoutError(
+            f"call exceeded {timeout:.0f}s hard deadline — abandoned"
+        )
+    if "error" in box:
+        return None, box["error"]
+    return box.get("result"), None
+
+
+# ---------------------------------------------------------------------------
 # OpenRouter API call (Phase 8: accepts sampling params + max_tokens)
 # ---------------------------------------------------------------------------
 
 def _call_llm(messages: list[dict], model: str = _DEFAULT_MODEL,
               sampling: Optional[dict] = None,
               max_tokens: int = 150) -> Optional[str]:
-    """Call OpenRouter API with the given messages and sampling params."""
+    """Call OpenRouter API with the given messages and sampling params.
+
+    Runs under a hard wall-clock deadline (LLM_HTTP_TIMEOUT): on timeout or
+    any exception it returns None — never raises, never hangs — so the
+    caller's fallback chain (Qwen -> template) always completes the summon.
+    """
     key = _API_KEY or os.environ.get("OPENROUTER_API_KEY")
     if not key:
         return None
@@ -417,24 +468,31 @@ def _call_llm(messages: list[dict], model: str = _DEFAULT_MODEL,
 
     payload = json.dumps(payload_dict).encode()
 
-    req = urllib.request.Request(
-        OPENROUTER_URL,
-        data=payload,
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {key}",
-            "HTTP-Referer": "https://terramon.app",
-            "X-Title": "Terramon",
-        },
-    )
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {key}",
+        "HTTP-Referer": "https://terramon.app",
+        "X-Title": "Terramon",
+    }
+
+    def _post() -> bytes:
+        req = urllib.request.Request(
+            OPENROUTER_URL, data=payload, headers=headers,
+        )
+        with urllib.request.urlopen(req, timeout=LLM_HTTP_TIMEOUT) as resp:
+            return resp.read()
+
+    data, err = _run_with_deadline(_post, LLM_HTTP_TIMEOUT)
+    if data is None:
+        print(f"[LLM] OpenRouter API call failed: {err}")
+        return None
 
     try:
-        resp = urllib.request.urlopen(req, timeout=10)
-        data = json.loads(resp.read().decode())
-        content = data["choices"][0]["message"]["content"].strip()
+        parsed = json.loads(data.decode())
+        content = parsed["choices"][0]["message"]["content"].strip()
         return content
     except Exception as e:
-        print(f"[LLM] OpenRouter API call failed: {e}")
+        print(f"[LLM] OpenRouter response parse failed: {e}")
         return None
 
 
@@ -447,7 +505,9 @@ def _call_huggingface(messages: list[dict], sampling: Optional[dict] = None,
     """Call HuggingFace Inference API as a middle-layer fallback.
 
     Uses Qwen/Qwen2.5-7B-Instruct (free tier, 30K req/month).
-    This is the second step in the 3-deep fallback chain.
+    This is the second step in the 3-deep fallback chain. Also runs under
+    the same hard deadline (LLM_HTTP_TIMEOUT) so it can never stall a
+    summon; any failure returns None and the template fallback takes over.
     """
     token = os.environ.get("HF_TOKEN")
     if not token:
@@ -458,13 +518,20 @@ def _call_huggingface(messages: list[dict], sampling: Optional[dict] = None,
     try:
         from huggingface_hub import InferenceClient
         client = InferenceClient(model=_FALLBACK_MODEL, token=token)
-        response = client.chat_completion(
-            messages=messages,
-            max_tokens=max_tokens,
-            temperature=smp.get("temperature", 0.8),
-            top_p=smp.get("top_p", 0.9),
-            top_k=smp.get("top_k", 50),
-        )
+
+        def _chat():
+            return client.chat_completion(
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=smp.get("temperature", 0.8),
+                top_p=smp.get("top_p", 0.9),
+                top_k=smp.get("top_k", 50),
+            )
+
+        response, err = _run_with_deadline(_chat, LLM_HTTP_TIMEOUT)
+        if response is None:
+            print(f"[LLM] HuggingFace API call failed: {err}")
+            return None
         return response.choices[0].message.content.strip()
     except ImportError:
         print("[LLM] huggingface_hub not installed — skipping HF fallback")

@@ -205,6 +205,32 @@ class PlayerProgress:
     # `collection`/`distinct_count` is kept for backward compatibility.
     released_archetypes: set[str] = field(default_factory=set)
 
+    # M7: Mint counter — creatures minted into collectibles. Session mirror
+    # of the persisted seed records (the seeds are the source of truth; this
+    # is what /health exposes for the KPI cron). Default keeps old progress
+    # objects backward compatible.
+    mint_count: int = 0
+
+    @classmethod
+    def from_seeds(cls, seeds) -> "PlayerProgress":
+        """Rebuild progression from persisted thought seeds (redeploy-safe).
+
+        M4 hydration: the collection used to live in-memory (TMA state /
+        GameLoop._LOOP) and reset on every Railway redeploy while the
+        creature seeds survived on the volume (data/*.jsonl). Seeds are
+        the durable source of truth, so every counter is DERIVED from
+        them: distinct_count = len({s.summoned_agent}), xp = sum of
+        rarity awards, released count = seeds with status 'released'.
+        Callers should follow up with recalculate_tier() to restore the
+        goal tier without side effects.
+        """
+        p = cls(goal_distinct=5)
+        for s in seeds:
+            p.award(s.summoned_agent, Rarity(s.rarity))
+            if getattr(s, "status", "") == "released":
+                p.record_release(s.summoned_agent)
+        return p
+
     @property
     def level(self) -> int:
         """Level derived from total XP (1-indexed). Uses math_utils for consistency."""

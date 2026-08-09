@@ -129,6 +129,11 @@ _CLASSIFIER = EmbeddingClassifier()
 _MEMORY_PATH = Path("data/tma_memory.jsonl")
 _MEMORY = JsonMemory(_MEMORY_PATH)
 
+# Telegram Stars invoice for creature minting (Stars rail). openInvoice has
+# NO server callback in this MVP — the mint record for this rail is recorded
+# OPTIMISTICALLY on click (see mint_creature); Lightning mints on settle.
+_STARS_INVOICE_URL = "https://t.me/terramon_bot/TERRAMON_STAR_INVOICE"
+
 # GameLoop owns progression + reflection; SummonService persists each turn.
 _SERVICE = SummonService(
     classifier=_CLASSIFIER,
@@ -180,6 +185,14 @@ _ARCHETYPE_LORE = {
     "Magician": "Transforms the ordinary into the extraordinary.",
     "Ruler": "Brings order to chaos.",
 }
+
+# Summon anti-stall (KPI: server-side stall of the LLM path at 01:27 — the
+# summon event hung on the LLM call, the state-update never arrived and the
+# UI froze on summoning=True forever). These graceful fallbacks guarantee the
+# event ALWAYS clears summoning and returns a result, even when the LLM path
+# fails or times out: worst case the creature is born with a template greeting.
+_SUMMON_GREETING_FALLBACK = "Существо родилось, но молчит."
+_SUMMON_FAILURE_MESSAGE = "Что-то пошло не так — существо не родилось. Попробуй ещё раз."
 
 
 def _reflect_on_memory(seeds: list[ThoughtSeed], new_agent: str) -> str:
@@ -245,6 +258,13 @@ class TerramonState(rx.State):
     lightning_price: int = 0         # actual sats price (>= LIGHTNING_MIN_MINT_SATS)
     lightning_ref: str = ""          # hub invoice id for verification
     lightning_checking: bool = False  # in-flight verify flag
+
+    # M7 — Mint loop (closed): a real mint record on the seed + a counter
+    # for analytics. Stars = optimistic mint on click (openInvoice has no
+    # server callback); Lightning = mint only when the invoice SETTLES.
+    minted: bool = False       # current creature has a real mint record
+    minted_at: str = ""        # ISO timestamp of the mint ('' = not minted)
+    mint_count: int = 0        # total minted collectibles (synced from seeds)
 
     # Tamagotchi×Pokemon: creature agent interaction
     selected_agent_id: str = ""
@@ -487,6 +507,18 @@ class TerramonState(rx.State):
             self.summoning = False
             return
         self.summoning = True
+        # M4: Dedup guard — the exact same thought already birthed a
+        # creature. The router is deterministic (same thought => same
+        # agent), so an existing seed with this raw_input IS the same
+        # creature. Load it instead of summoning a duplicate: this kills
+        # the redeploy pattern where the in-memory collection resets, the
+        # gate reopens, and the next summon of the same thought appends a
+        # duplicate Hero to the persisted seeds.
+        existing = _MEMORY.find_seed(text)
+        if existing is not None:
+            self._present_existing_creature(existing)
+            self.summoning = False
+            return
         # G05: FIRST summon — capture location so the creature is born
         # anchored to a real place. Reflex 0.9.x: the call_script result is
         # delivered to callback= (not via yield), so we defer the summon:
@@ -548,6 +580,9 @@ class TerramonState(rx.State):
             self.candle_lore = ""
             self.candle_lit = False
             self.candle_reason = ""
+            # M7: a new creature starts unminted (mint is per-creature).
+            self.minted = False
+            self.minted_at = ""
             seeds = _MEMORY.load_all_seeds()
             self.reflection = _reflect_on_memory(seeds, result.agent)
             if seeds:
@@ -573,7 +608,10 @@ class TerramonState(rx.State):
                     self.geo_status = "granted"
         except Exception as e:
             log.error(f"take_turn failed: {e}", exc_info=True)
+            # Anti-stall guard: ALWAYS clear the flag and return a graceful
+            # result — never leave summoning=True with a frozen UI.
             self.summoning = False
+            self.agent_message = _SUMMON_FAILURE_MESSAGE
             return
 
         # B1: Creature greeting via LLM (silent fail)
@@ -590,9 +628,13 @@ class TerramonState(rx.State):
             _greeting_msg = generate_response(_greeting_agent, "summon", text)
             if _greeting_msg and hasattr(_greeting_msg, 'text'):
                 self.creature_greeting = _greeting_msg.text
+            else:
+                # LLM silent (timeout/fallback chain exhausted) — the creature
+                # is still born, with a graceful template greeting.
+                self.creature_greeting = _SUMMON_GREETING_FALLBACK
         except Exception as e:
             log.warning(f"LLM greeting failed: {e}")
-            self.creature_greeting = ""
+            self.creature_greeting = _SUMMON_GREETING_FALLBACK
 
         # B3: Memory greeting
         try:
@@ -811,22 +853,45 @@ class TerramonState(rx.State):
         self.candle_lit = False
         self.candle_reason = ""
         seeds = _MEMORY.load_all_seeds()
-        self.terra = [_seed_to_card(s) for s in seeds]
-        if seeds:
-            _LOOP.progress = PlayerProgress(goal_distinct=5)
-            for s in seeds:
-                _LOOP.progress.award(s.summoned_agent, Rarity(s.rarity))
-            self.xp = _LOOP.progress.xp
-            self.level = _LOOP.progress.level
-            self.distinct = _LOOP.progress.distinct_count
-            self.goal = _LOOP.progress.goal_distinct
+        # M4: rebuild the WHOLE collection state from the persisted seeds.
+        # Previously only terra/xp/level/distinct were restored, while
+        # summon_count/has_summoned/goal_reached reset to 0 — after a
+        # redeploy the monetization gate opened again and the next summon
+        # of the same thought created a duplicate creature. Now every
+        # counter is seed-derived (see hydrate_from_memory).
+        _LOOP.progress = PlayerProgress.from_seeds(seeds)
+        _LOOP.progress.recalculate_tier()
+        hydrated = hydrate_from_memory(_MEMORY, seeds=seeds)
+        self.terra = hydrated["terra"]
+        if hydrated["has_summoned"]:
+            self.summon_count = hydrated["summon_count"]
+            self.has_summoned = True
+            self.xp = hydrated["xp"]
+            self.level = hydrated["level"]
+            self.distinct = hydrated["distinct"]
+            self.goal = hydrated["goal"]
+            self.goal_reached = hydrated["goal_reached"]
+            self.summon_streak = hydrated["summon_streak"]
             # I05: progression tier vars
-            self.tier_name = _LOOP.progress.current_tier_name
-            self.tier_badge = _LOOP.progress.current_tier_badge
-            self.next_tier_name = _LOOP.progress.next_tier_name
-            self.next_tier_distinct = _LOOP.progress.next_tier_requirement
+            self.tier_name = hydrated["tier_name"]
+            self.tier_badge = hydrated["tier_badge"]
+            self.next_tier_name = hydrated["next_tier_name"]
+            self.next_tier_distinct = hydrated["next_tier_distinct"]
             # G05: released-based win counter for the "Встречено X из 5" display
-            self._refresh_released_count()
+            self.released_count = hydrated["released_count"]
+            # F3 gate: a returning player has already been through the
+            # summon flow — keep them unblocked across redeploys. The MVP
+            # unlock is free anyway (Stars fallback sets unlocked=True),
+            # and real monetization is MINT, not the summon gate.
+            self.unlocked = True
+
+        # M7: re-sync the session mint counter from the PERSISTED seed
+        # records (survives reloads — /health reads the same source).
+        self.mint_count = sum(1 for s in seeds if getattr(s, "minted", False))
+        try:
+            _LOOP.progress.mint_count = self.mint_count
+        except Exception:
+            pass
 
         # Phase 4: tick decay on app open (retention)
         if seeds:
@@ -842,9 +907,43 @@ class TerramonState(rx.State):
                     self.candle_lore = getattr(s, "candle_lore", "")
                     self.candle_lit = bool(self.candle_lore)
                     self.released_words = self.released_words or self.final_words
+                    # M7: restore the mint record so the 💠 MINTED badge
+                    # survives reloads.
+                    self.minted = bool(getattr(s, "minted", False))
+                    self.minted_at = str(getattr(s, "minted_at", "") or "")
                     break
         except Exception as e:
             log.warning(f"Candle state sync failed: {e}")
+
+    def _present_existing_creature(self, seed: ThoughtSeed) -> None:
+        """M4: show the already-persisted creature for a repeated thought.
+
+        Dedup guard path: NO new seed is saved, NO counters advance
+        (summon_count, xp, distinct stay as persisted) — the collection
+        cannot gain a duplicate creature from a re-summoned thought.
+        """
+        rarity = seed.rarity if isinstance(seed.rarity, str) else seed.rarity.value
+        self.agent = seed.summoned_agent
+        self.rarity = rarity
+        self.sigil = _RARITY_SIGIL.get(rarity, "·")
+        self.color = _RARITY_COLOR.get(rarity, "#9ca3af")
+        self.lore = _ARCHETYPE_LORE.get(seed.summoned_agent, "A thought made flesh.")
+        self.price_sats = seed.price_sats
+        self.has_summoned = True
+        self.insight = f"INSIGHT: {seed.insight.therefore}" if seed.insight else ""
+        self.reflection = (
+            f"Ты уже встречал эту мысль — {seed.summoned_agent} живёт в твоей терре."
+        )
+        self.place = seed.place_name or (
+            f"{seed.lat:.2f}, {seed.lon:.2f}" if (seed.lat or seed.lon) else ""
+        )
+        self.agent_lat = seed.lat or 0.0
+        self.agent_lon = seed.lon or 0.0
+        self.released_just_now = seed.status == "released"
+        self.agent_name = seed.summoned_agent
+        self.agent_message = (
+            f"🔁 Ты уже встречал эту мысль — {seed.summoned_agent} не рождается дважды."
+        )
 
     @rx.event
     def capture(self):
@@ -1402,10 +1501,67 @@ class TerramonState(rx.State):
 
     @rx.event
     def mint_creature(self):
-        """Mint current creature via Telegram Stars / Lightning."""
+        """Mint current creature — Stars rail (Telegram openInvoice).
+
+        HONEST DESIGN DECISION (M7): Telegram Stars openInvoice has NO server
+        callback in this MVP, so the mint record is OPTIMISTIC — recorded on
+        click. Lightning (verify_lightning) mints only on invoice SETTLE.
+        """
         if not self.has_summoned or self.price_sats <= 0:
             return
-        self.agent_message = f"⚡ Minting {self.agent} for {self.price_sats} Stars..."
+        if self._record_mint():
+            self.agent_message = (
+                f"💠 {self.agent} minted — a tradable collectible! "
+                f"({self.mint_count} minted total)"
+            )
+        # Keep the Stars rail: open the Stars invoice in the TMA.
+        return rx.call_script(
+            f"if(window.Telegram?.WebApp?.openInvoice)Telegram.WebApp.openInvoice('{_STARS_INVOICE_URL}');"
+        )
+
+    def _record_mint(self) -> bool:
+        """The real mint record: persist minted/minted_at on the current seed
+        and bump the counter. Idempotent — a creature is minted at most once
+        (second mint = no-op, no double-count).
+
+        Returns True when a NEW mint was recorded, False on no-op/failure.
+        """
+        if not self.agent or not self.thought:
+            return False
+        if self.minted:
+            self.agent_message = "💠 This creature is already minted."
+            return False
+        import datetime as _dt
+        now = _dt.datetime.now().isoformat(timespec="seconds")
+        # Persisted guard: survive a session reload (self.minted may be stale).
+        try:
+            already, _ = _MEMORY.get_mint_state(self.agent, self.thought)
+        except Exception:
+            already = False
+        if already:
+            self.minted = True
+            self.minted_at = now
+            return False
+        try:
+            ok = bool(
+                _MEMORY.update_seed(
+                    self.agent, self.thought, minted=True, minted_at=now
+                )
+            )
+        except Exception as e:
+            log.warning(f"Mint persistence failed: {e}")
+            ok = False
+        if not ok:
+            self.agent_message = "💠 Mint failed — creature record not found."
+            return False
+        self.minted = True
+        self.minted_at = now
+        self.mint_count += 1
+        try:
+            _LOOP.progress.mint_count += 1
+        except Exception:
+            pass
+        return True
 
     # ── I10: Stasis caretaker ─────────────────────────────────────────
 
@@ -1432,10 +1588,9 @@ class TerramonState(rx.State):
         Opens Stars invoice via TMA bridge (Telegram.WebApp.openInvoice).
         Falls back to unlock on same turn for MVP development."""
         # Replace with your real Stars invoice link from @BotFather
-        _stars_url = "https://t.me/terramon_bot/TERRAMON_STAR_INVOICE"
         self.unlocked = True  # MVP fallback — remove when real invoice is live
         return rx.call_script(
-            f"if(window.Telegram?.WebApp?.openInvoice)Telegram.WebApp.openInvoice('{_stars_url}');"
+            f"if(window.Telegram?.WebApp?.openInvoice)Telegram.WebApp.openInvoice('{_STARS_INVOICE_URL}');"
         )
 
     @rx.event
@@ -1481,7 +1636,14 @@ class TerramonState(rx.State):
             if _ALBY.verify_payment(req):
                 self.unlocked = True
                 self.lightning_checking = False
-                self.agent_message = "✅ Payment received! Your thought is free to summon."
+                # M7: Lightning mints on SETTLE — the invoice really was paid.
+                if self._record_mint():
+                    self.agent_message = (
+                        f"✅ Payment received! 💠 {self.agent} minted — "
+                        f"a tradable collectible. ({self.mint_count} minted total)"
+                    )
+                else:
+                    self.agent_message = "✅ Payment received! Your thought is free to summon."
             else:
                 self.lightning_checking = False
                 self.agent_message = "⏳ Not settled yet — waiting for the payment to confirm."
@@ -1750,6 +1912,8 @@ def _seed_to_card(seed: ThoughtSeed) -> dict:
         "released": seed.status == "released",
         # Candle ritual: the creature's new line ('' = candle never lit)
         "candle_lore": getattr(seed, "candle_lore", ""),
+        # M7: the creature became a minted collectible
+        "minted": bool(getattr(seed, "minted", False)),
         # P3 M04: Trade info
         "for_trade": getattr(seed, 'for_trade', False),
         "trade_price_sats": getattr(seed, 'trade_price_sats', 0),
@@ -1762,6 +1926,42 @@ def _seed_to_card(seed: ThoughtSeed) -> dict:
                  or (f"{getattr(seed, 'lat', 0):.2f}, {getattr(seed, 'lon', 0):.2f}" if getattr(seed, "lat", None) is not None else ""),
     }
     return card
+
+
+def hydrate_from_memory(
+    memory: JsonMemory, seeds: list[ThoughtSeed] | None = None
+) -> dict:
+    """Seed-derived hydration of the TMA collection state (redeploy-safe).
+
+    M4: the collection used to live in-memory (TerramonState fields +
+    GameLoop._LOOP) and was wiped on every Railway redeploy, while the
+    creature seeds survived on the volume (data/*.jsonl). This rebuilds
+    the UI counters from the persisted seeds so a redeploy NEVER shows
+    an empty collection and never re-opens the summon gate that caused
+    4× duplicate Hero seeds.
+
+    Returns a plain dict of the state fields load_terra mirrors.
+    """
+    if seeds is None:
+        seeds = memory.load_all_seeds()
+    progress = PlayerProgress.from_seeds(seeds)
+    progress.recalculate_tier()
+    return {
+        "terra": [_seed_to_card(s) for s in seeds],
+        "summon_count": len(seeds),
+        "has_summoned": bool(seeds),
+        "distinct": progress.distinct_count,
+        "xp": progress.xp,
+        "level": progress.level,
+        "goal": progress.goal_distinct,
+        "goal_reached": progress.distinct_count >= progress.goal_distinct,
+        "released_count": progress.released_count(),
+        "summon_streak": progress.summon_streak,
+        "tier_name": progress.current_tier_name,
+        "tier_badge": progress.current_tier_badge,
+        "next_tier_name": progress.next_tier_name,
+        "next_tier_distinct": progress.next_tier_requirement,
+    }
 
 
 def terra_card(item: dict) -> rx.Component:
@@ -1950,7 +2150,27 @@ def creature_card() -> rx.Component:
                     text_shadow=TerramonState.rarity_glow_style,
                 ),
             ),
-            rx.heading(TerramonState.agent, size="7", color=TerramonState.color),
+            rx.hstack(
+                rx.heading(TerramonState.agent, size="7", color=TerramonState.color),
+                # M7: minted collectible badge — GameBoy style, amber/gold
+                rx.cond(
+                    TerramonState.minted,
+                    rx.hstack(
+                        rx.text("💠", font_size="0.8em"),
+                        rx.text("MINTED", font_size="0.55em", color="#fbbf24",
+                                font_weight="bold", letter_spacing="0.12em"),
+                        spacing="1",
+                        align="center",
+                        background="#1a1405",
+                        border="1px solid #fbbf2444",
+                        border_radius="999px",
+                        padding="0.15em 0.6em",
+                    ),
+                    rx.fragment(),
+                ),
+                spacing="2",
+                align="center",
+            ),
             rx.text('"' + TerramonState.thought + '"', font_style="italic",
                     color="#e5e7eb", text_align="center"),
             rx.text(TerramonState.lore, font_size="0.9em", color="#9ca3af"),
@@ -3760,9 +3980,21 @@ app.add_page(index, title="Terramon — summon your thoughts", on_load=TerramonS
 # container is ready to serve traffic.
 # Using Starlette route directly (Reflex 0.9.x compat)
 def health(request):
-    """Return JSON health status for Railway healthcheckPath."""
+    """Return JSON health status for Railway healthcheckPath.
+
+    M7 (KPI cron): ``mint_count`` = number of creatures with a real mint
+    record. Read from the PERSISTED seeds (not the in-memory progress,
+    which resets on every page load) so the value is correct even when the
+    cron probes /health without an active browser session.
+    """
     from starlette.responses import JSONResponse
-    return JSONResponse({"status": "ok", "tests": 84})
+    try:
+        mint_count = sum(
+            1 for s in _MEMORY.load_all_seeds() if getattr(s, "minted", False)
+        )
+    except Exception:
+        mint_count = 0
+    return JSONResponse({"status": "ok", "tests": 84, "mint_count": mint_count})
 
 
 def static_map(request):
