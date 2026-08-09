@@ -1,5 +1,23 @@
 from playwright.sync_api import sync_playwright
-import re, json, urllib.request
+import argparse, os, re, json, urllib.request
+
+try:
+    from scripts.kpi import tma_env
+except ImportError:  # run as plain script: python scripts/kpi/play_to_win.py
+    import tma_env
+
+# TMA environment: by default the app runs as a Telegram Mini App via the
+# injected resilient window.Telegram.WebApp mock (headless Chromium has no
+# Telegram runtime). --tma-studio / TMA_STUDIO_URL attempts the TMA-Studio
+# web demo first and falls back to the mock honestly (see probe below).
+AP = argparse.ArgumentParser(description="Terramon KPI Playwright player (TMA-aware)")
+AP.add_argument("--tma-studio", action="store_true",
+                help="attempt TMA-Studio web demo (?appUrl=) first; falls back to the injected mock")
+AP.add_argument("--tma-studio-url", default=os.environ.get("TMA_STUDIO_URL", tma_env.TMA_STUDIO_DEFAULT_URL),
+                help="TMA-Studio URL to probe (default: env TMA_STUDIO_URL or https://tma-studio.pages.dev)")
+ARGS = AP.parse_args()
+TMA_STUDIO_MODE = ARGS.tma_studio
+TMA_STUDIO_URL = ARGS.tma_studio_url
 
 URL = "https://terramon-tma-production.up.railway.app/"
 ARCHETYPES = ["Hero","Rebel","Sage","Jester","Creator","Magician","Lover","Caregiver","Explorer","Innocent","Ruler","Orphan"]
@@ -181,6 +199,13 @@ def fetch_mint_count():
 
 with sync_playwright() as p:
     browser = p.chromium.launch(headless=True, args=["--no-sandbox"])
+    # TMA-Studio honest attempt: the pages.dev demo is a marketing landing
+    # page (verified from source + live probe) — probe once with ?appUrl=,
+    # record the outcome, and fall back to the injected mock either way.
+    tma_studio_probe = None
+    if TMA_STUDIO_MODE:
+        tma_studio_probe = tma_env.probe_tma_studio(browser, URL, studio_url=TMA_STUDIO_URL)
+        print(f"[tma-studio] probe: {json.dumps(tma_studio_probe, ensure_ascii=False)}")
     collected = {}   # archetype -> thought
     round_log = []
     oye_total = 0
@@ -200,7 +225,19 @@ with sync_playwright() as p:
         except Exception as e:
             print(f"[round {round_no}] geo setup failed: {str(e)[:120]}")
         page = ctx.new_page()
-        rlog = {"round": round_no, "theme": theme, "ok": False, "error": None, "geo_line": None, "m2": None, "m7": None}
+        # TMA env: inject the resilient window.Telegram.WebApp mock BEFORE
+        # the app loads, so this round runs as a real TMA (platform android,
+        # per-round player identity, LocationButton geo bridge auto-answered
+        # with the simulated Moscow coords — M1 via the TMA path).
+        tma_setup = tma_env.setup_tma_env(
+            page,
+            user_id=710000000 + round_no,
+            first_name=f"KPI{round_no}",
+            username=f"kpi_tester_{round_no}",
+            auto_location=(GEO_LAT, GEO_LON),
+        )
+        print(f"[round {round_no}] TMA env: {json.dumps(tma_setup, ensure_ascii=False)}")
+        rlog = {"round": round_no, "theme": theme, "ok": False, "error": None, "geo_line": None, "m2": None, "m7": None, "tma": None}
         try:
             page.goto(URL, timeout=60000)
             page.wait_for_timeout(6000)
@@ -235,6 +272,28 @@ with sync_playwright() as p:
             mint_presence[round_no] = m7["mint_button_count"]
             if m7["invoice_ok"] is not None:
                 invoice_ok_rounds.append((round_no, m7["invoice_msg"]))
+
+            # TMA-only evidence: what the mock recorded during this round
+            # (openInvoice / HapticFeedback / LocationButton / event bus).
+            tma_ev = tma_env.read_tma_evidence(page)
+            if tma_ev:
+                tma_summary = {
+                    "webapp_present": True,
+                    "platform": tma_ev.get("platform"),
+                    "user_id": (tma_ev.get("user") or {}).get("id"),
+                    "haptic_calls": len(tma_ev.get("hapticCalls", [])),
+                    "open_invoice_calls": len(tma_ev.get("openInvoiceCalls", [])),
+                    "location_requests": len(tma_ev.get("locationRequests", [])),
+                    "location_accessed_emitted": sum(
+                        1 for e in tma_ev.get("emitted", []) if e.get("event") == "location_accessed"
+                    ),
+                    "events_listened": tma_ev.get("events", {}),
+                    "ready_calls": tma_ev.get("readyCalls", 0),
+                }
+            else:
+                tma_summary = {"webapp_present": False}
+            rlog["tma"] = tma_summary
+            print(f"   [TMA evidence] {json.dumps(tma_summary, ensure_ascii=False)}")
 
             # read Terra collection to get authoritative unique/total
             names, counts, tbody = read_terra(page)
@@ -284,6 +343,26 @@ with sync_playwright() as p:
     print(f"invoice_ok: {invoice_ok_rounds if invoice_ok_rounds else 'no invoice message observed (payment_gate not seen or no agent_message)'}")
     mc = fetch_mint_count()
     print(f"mint_count_health: {mc}  (from /health, json mint_count)")
+    # TMA-ENV evidence: which TMA-only features got exercised this run
+    tma_rounds_ok = [r["round"] for r in round_log if r.get("tma") and r["tma"].get("webapp_present")]
+    tma_totals = {
+        "haptic_calls": sum((r.get("tma") or {}).get("haptic_calls", 0) for r in round_log),
+        "open_invoice_calls": sum((r.get("tma") or {}).get("open_invoice_calls", 0) for r in round_log),
+        "location_requests": sum((r.get("tma") or {}).get("location_requests", 0) for r in round_log),
+        "location_accessed_emitted": sum((r.get("tma") or {}).get("location_accessed_emitted", 0) for r in round_log),
+        "ready_calls": sum((r.get("tma") or {}).get("ready_calls", 0) for r in round_log),
+    }
+    print()
+    print("=== TMA-ENV ===")
+    print("tma_mode: injected-mock — resilient window.Telegram.WebApp mock injected pre-load",
+          "(page.add_init_script); headless Chromium has no Telegram runtime")
+    print(f"tma_platform: android · version: {tma_env.DEFAULT_VERSION} · colorScheme: dark")
+    print("tma_initdata: well-formed query string; hash FAKE unless a real bot token is",
+          "passed to setup_tma_env (then real HMAC-SHA256, exactly like Telegram's backend)")
+    print(f"tma_webapp_present_rounds: {tma_rounds_ok}")
+    print(f"tma_features_exercised: {json.dumps(tma_totals, ensure_ascii=False)}",
+          "(open_invoice=0 expected: KPI never clicks '⚡ MINT' — presence-only policy)")
+    print(f"tma_studio_probe: {json.dumps(tma_studio_probe, ensure_ascii=False) if tma_studio_probe else 'not attempted (default mode; use --tma-studio or TMA_STUDIO_URL)'}")
     failed = [{"round": r["round"], "theme": r["theme"], "error": r["error"]} for r in round_log if not r["ok"]]
     print(f"failed_rounds: {json.dumps(failed, ensure_ascii=False)}")
     if failed:

@@ -29,7 +29,7 @@ UI/UX SINS FIXED (July 2026, after ccgs-p + prism audit):
 
 from __future__ import annotations
 
-import logging, sys, traceback
+import json, logging, sys, traceback
 
 # Logging setup — writes to stderr (visible in Railway logs)
 logging.basicConfig(
@@ -70,6 +70,7 @@ from terramon.domain.candle import (
     seed_is_released,
 )
 from terramon.domain.insight import GeoContext, Insight
+from terramon.domain.player import PlayerIdentity
 from tools.time_tool import get_current_time
 
 # ── G05: Geo-capture support (Telegram LocationButton → geolocation API) ──
@@ -97,6 +98,19 @@ _LOCATION_JS = '''(async () => {
       { timeout: 10000, maximumAge: 300000 });
   });
 })()'''
+
+
+# ── Player identity capture: read Telegram.WebApp.initData (raw, signed) ──
+# Runs on every app open (load_terra). Empty string when not inside a TMA —
+# the anon fallback path, never a crash. The raw string is verified server-side
+# (HMAC-SHA256 vs the bot token) before any identity is trusted.
+_INITDATA_JS = (
+    "(() => {"
+    "try { return (window.Telegram && window.Telegram.WebApp && "
+    "window.Telegram.WebApp.initData) ? String(window.Telegram.WebApp.initData) : ''; }"
+    "catch (e) { return ''; }"
+    "})()"
+)
 
 
 def _validate_coords(coords) -> tuple[float | None, float | None]:
@@ -128,6 +142,17 @@ _CLASSIFIER = EmbeddingClassifier()
 # Persistent memory — survives sessions (Railway volume mount at data/).
 _MEMORY_PATH = Path("data/tma_memory.jsonl")
 _MEMORY = JsonMemory(_MEMORY_PATH)
+
+# ── Player identity (D7 retention cohorts) ──────────────────────────
+# The TMA ships initData signed with the BOT token. Verification is pure
+# HMAC-SHA256 (terramon.domain.player); with no token configured the app
+# keeps working — every session is simply anonymous (auth is additive).
+_BOT_TOKEN = os.environ.get("TERRAMON_BOT_TOKEN") or os.environ.get("BOT_TOKEN") or ""
+if not _BOT_TOKEN:
+    log.warning(
+        "TERRAMON_BOT_TOKEN/BOT_TOKEN not set — initData verification disabled, "
+        "all sessions will be anonymous (player_count/returning_players_7d stay 0)."
+    )
 
 # Telegram Stars invoice for creature minting (Stars rail). openInvoice has
 # NO server callback in this MVP — the mint record for this rail is recorded
@@ -333,6 +358,12 @@ class TerramonState(rx.State):
     geo_lat: float = 0.0
     geo_lon: float = 0.0
     geo_place: str = ""
+
+    # ── Player identity (D7 retention) ──
+    # Verified Telegram identity from initData; None while unverified/anonymous.
+    # '' = not yet captured, 'anon' = initData absent/invalid (game keeps
+    # working — auth is additive), otherwise a JSON object {user_id, ...}.
+    player_identity: str = ""
 
     # TERRA vision: the creature's own words about its birthplace
     # (generated lazily via see_birthplace, cached in this field)
@@ -852,6 +883,11 @@ class TerramonState(rx.State):
     @rx.event
     def load_terra(self):
         """Load the player's persisted terra on app open (survives redeploys)."""
+        # Player identity: read the raw initData from the TMA bridge FIRST.
+        # The verified result lands in on_init_data (callback pattern, same as
+        # G05 geolocation) — the game never blocks on it: absent/invalid
+        # initData simply leaves the session anonymous.
+        yield rx.call_script(_INITDATA_JS, callback=TerramonState.on_init_data)
         # Candle ritual: start unlit; the seed sync below restores the lit
         # state for an already-released creature with a persisted candle.
         self.released_just_now = False
@@ -921,6 +957,37 @@ class TerramonState(rx.State):
                     break
         except Exception as e:
             log.warning(f"Candle state sync failed: {e}")
+
+    @rx.event
+    def on_init_data(self, result):
+        """Verify + persist the Telegram identity from initData (additive auth).
+
+        Callback of the load_terra call_script. ``result`` is the raw initData
+        string ('' outside a TMA). Invalid/missing initData → anonymous player,
+        the game continues exactly as before — identity never gates gameplay.
+        """
+        raw = result or ""
+        try:
+            identity = PlayerIdentity.from_init_data(raw, _BOT_TOKEN)
+        except Exception as e:
+            log.warning("initData verification failed (anon fallback): %s", e)
+            identity = None
+        if identity is None:
+            self.player_identity = "anon"
+            return
+        try:
+            _MEMORY.record_player(identity)
+        except Exception as e:
+            log.warning("record_player failed (identity not persisted): %s", e)
+        self.player_identity = json.dumps(
+            {
+                "user_id": identity.user_id,
+                "first_name": identity.first_name,
+                "username": identity.username,
+                "platform": identity.platform,
+            },
+            ensure_ascii=False,
+        )
 
     def _present_existing_creature(self, seed: ThoughtSeed) -> None:
         """M4: show the already-persisted creature for a repeated thought.
@@ -3736,9 +3803,22 @@ def health(request):
         mint_count = sum(
             1 for s in _MEMORY.load_all_seeds() if getattr(s, "minted", False)
         )
+        # Player identity (D7 retention): read from the PERSISTED players
+        # registry so the KPI cron gets cohort-adjacent metrics without an
+        # active browser session (same pattern as mint_count above).
+        player_count = _MEMORY.count_unique_players()
+        returning_players_7d = _MEMORY.count_returning_players(days=7)
     except Exception:
         mint_count = 0
-    return JSONResponse({"status": "ok", "tests": 84, "mint_count": mint_count})
+        player_count = 0
+        returning_players_7d = 0
+    return JSONResponse({
+        "status": "ok",
+        "tests": 84,
+        "mint_count": mint_count,
+        "player_count": player_count,
+        "returning_players_7d": returning_players_7d,
+    })
 
 
 def static_map(request):

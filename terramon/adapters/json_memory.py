@@ -20,6 +20,11 @@ from pathlib import Path
 from typing import Any
 
 from terramon.domain.insight import Insight, GeoContext
+from terramon.domain.player import (
+    PlayerIdentity,
+    PlayerRecord,
+    merge_player_record,
+)
 from terramon.domain.thought_seed import ThoughtSeed
 from terramon.ports.memory_port import MemoryPort
 
@@ -79,12 +84,26 @@ _INDEX_TS = "CREATE INDEX IF NOT EXISTS idx_seeds_timestamp ON seeds(timestamp)"
 class JsonMemory(MemoryPort):
     """Stores thought seeds as newline-delimited JSON records."""
 
-    def __init__(self, path: Path | str) -> None:
-        """Open or create the memory file at ``path``."""
+    def __init__(self, path: Path | str, players_path: Path | str | None = None) -> None:
+        """Open or create the memory file at ``path``.
+
+        ``players_path`` — where the player registry lives (defaults to a
+        ``players.jsonl`` sibling of ``path``). Kept separate from the seeds
+        stream so /health can read unique/returning player counts without
+        parsing creature records.
+        """
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         if not self.path.exists():
             self.path.write_text("", encoding="utf-8")
+        self.players_path = (
+            Path(players_path)
+            if players_path is not None
+            else self.path.with_name("players.jsonl")
+        )
+        self.players_path.parent.mkdir(parents=True, exist_ok=True)
+        if not self.players_path.exists():
+            self.players_path.write_text("", encoding="utf-8")
 
     def save_seed(self, seed: ThoughtSeed) -> None:
         """Append one thought seed to the memory file."""
@@ -547,6 +566,76 @@ class JsonMemory(MemoryPort):
             "oldest_seed": timestamps[0] if timestamps else None,
             "newest_seed": timestamps[-1] if timestamps else None,
         }
+
+    # ------------------------------------------------------------------
+    # Player registry (data/players.jsonl) — stable identity for D7
+    # retention cohorts. Upsert by Telegram user_id; anon is never stored.
+    # ------------------------------------------------------------------
+    def record_player(self, identity: PlayerIdentity, now: float | None = None) -> PlayerRecord | None:
+        """Upsert one player visit into the registry.
+
+        Same user twice → session_count incremented (unless both visits fall
+        inside the 30 min session window), first_seen_at stays unchanged.
+        Anonymous identities (user_id 0 / invalid) are ignored — returns None.
+        """
+        if identity is None or getattr(identity, "user_id", 0) <= 0:
+            return None
+        import time as _time
+        ts = now if now is not None else _time.time()
+        players = self.load_players()
+        existing = next((p for p in players if p.user_id == identity.user_id), None)
+        updated = merge_player_record(existing, identity, ts)
+        if existing is None:
+            players.append(updated)
+        # Serialize the whole registry back (atomic: tmp + rename) so a
+        # concurrent read never sees a half-written line.
+        tmp = self.players_path.with_suffix(".jsonl.tmp")
+        try:
+            with tmp.open("w", encoding="utf-8") as fh:
+                for rec in players:
+                    fh.write(json.dumps(rec.to_dict(), ensure_ascii=False) + "\n")
+            tmp.replace(self.players_path)
+        except (OSError, IOError) as exc:
+            log.error("Failed to write players registry %s: %s", self.players_path, exc)
+            raise
+        return updated
+
+    def load_players(self) -> list[PlayerRecord]:
+        """Return every stored player record, oldest first (corruption-safe)."""
+        records: list[PlayerRecord] = []
+        if not self.players_path.exists():
+            return records
+        raw = self.players_path.read_text(encoding="utf-8")
+        for idx, line in enumerate(raw.splitlines(), start=1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                records.append(PlayerRecord.from_dict(json.loads(line)))
+            except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+                log.warning(
+                    "Corrupt player line %d in %s: %s — skipping",
+                    idx, self.players_path, exc,
+                )
+        return records
+
+    def count_unique_players(self) -> int:
+        """Total distinct verified players ever seen."""
+        return len(self.load_players())
+
+    def count_returning_players(self, days: int = 7) -> int:
+        """Players with 2+ sessions who came back within the window.
+
+        Returning = session_count > 1 AND last_seen_at inside the last
+        ``days`` days. One-session players never count, no matter how fresh.
+        """
+        import time as _time
+        cutoff = _time.time() - days * 86400
+        return sum(
+            1
+            for p in self.load_players()
+            if p.session_count > 1 and p.last_seen_at >= cutoff
+        )
 
 
 # ======================================================================
