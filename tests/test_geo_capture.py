@@ -176,3 +176,19 @@ def test_validate_coords_rejects_out_of_range() -> None:
     assert _validate_coords(50.06, 19.94) == (50.06, 19.94)
     assert _validate_coords(-90.0, -180.0) == (-90.0, -180.0)  # boundary ok
     assert _validate_coords("50.06", "19.94") == (50.06, 19.94)  # strings parse
+
+
+def test_callback_handlers_exist():
+    """Regression guard: every callback= reference must point to a real
+    @rx.event handler. This caught the _on_coords/on_coords typo that
+    killed the first summon for two deploys while 335 tests stayed green."""
+    import terramon_tma.terramon_tma as t
+    src = open("terramon_tma/terramon_tma.py", encoding="utf-8").read()
+    # find all callback=TerramonState.X references
+    import re
+    refs = re.findall(r"callback=TerramonState\.(\w+)", src)
+    assert refs, "no callback references found — pattern changed?"
+    for ref in refs:
+        assert hasattr(t.TerramonState, ref), (
+            f"callback references missing handler: TerramonState.{ref}"
+        )

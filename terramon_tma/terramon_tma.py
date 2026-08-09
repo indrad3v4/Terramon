@@ -527,7 +527,7 @@ class TerramonState(rx.State):
             self.pending_thought = text
             self.summoning = False
             self.agent_message = "📍 Закрепи свою мысль на планете — разреши геолокацию"
-            yield rx.call_script(_LOCATION_JS, callback=TerramonState._on_coords)
+            yield rx.call_script(_LOCATION_JS, callback=TerramonState.on_coords)
             return
         try:
             _geo = (
