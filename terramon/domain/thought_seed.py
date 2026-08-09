@@ -39,6 +39,11 @@ class ThoughtSeed:
     # over time via cosine distance between birth and current embeddings.
     birth_embedding: dict[int, float] | None = None
 
+    # Candle ritual: the creature's new line written after the player lights
+    # a 500-sat WebLN candle at its birthplace. Persisted on the seed so the
+    # memorial survives reloads. Empty string = candle never lit.
+    candle_lore: str = ""
+
     @classmethod
     def make(
         cls,

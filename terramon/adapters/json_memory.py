@@ -127,6 +127,9 @@ class JsonMemory(MemoryPort):
         if seed.birth_embedding is not None:
             # Ensure int keys survive JSON round-trip
             record["birth_embedding"] = {str(k): v for k, v in seed.birth_embedding.items()}
+        # Candle ritual: persist the creature's new line (empty default omitted)
+        if seed.candle_lore:
+            record["candle_lore"] = seed.candle_lore
         try:
             with self.path.open("a", encoding="utf-8") as file:
                 file.write(json.dumps(record, ensure_ascii=False) + "\n")
@@ -184,6 +187,49 @@ class JsonMemory(MemoryPort):
                     record["birth_embedding"] = {int(k): v for k, v in be_data.items()}
             seeds.append(ThoughtSeed(**record))
         return seeds
+
+    def update_seed(
+        self,
+        summoned_agent: str,
+        raw_input: str,
+        status: str | None = None,
+        candle_lore: str | None = None,
+    ) -> bool:
+        """In-place field update of the newest record matching (agent, thought).
+
+        Used by the release + candle rituals to persist status/candle_lore
+        on the creature seed (JSONL is append-only, so we rewrite the file
+        atomically). Returns True when a matching record was updated.
+        """
+        if not self.path.exists():
+            return False
+        raw = self.path.read_text(encoding="utf-8")
+        lines = raw.splitlines()
+        changed = False
+        for idx in range(len(lines) - 1, -1, -1):  # newest match wins
+            line = lines[idx].strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if (
+                record.get("summoned_agent") == summoned_agent
+                and record.get("raw_input") == raw_input
+            ):
+                if status is not None:
+                    record["status"] = status
+                if candle_lore is not None:
+                    record["candle_lore"] = candle_lore
+                lines[idx] = json.dumps(record, ensure_ascii=False)
+                changed = True
+                break
+        if changed:
+            tmp = self.path.with_suffix(self.path.suffix + ".tmp")
+            tmp.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+            tmp.replace(self.path)
+        return changed
 
     # ── Proximity search (G03: Haversine-based find_nearby) ─────────────────
 
