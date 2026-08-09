@@ -129,7 +129,7 @@ def test_health_carries_seed_count(source):
 
 # The "last persisted seed" the backfill degrades to when insight geo is
 # empty — mirrors the real fix reading seeds[-1] in the app source.
-_SEED_FALLBACK = (55.7558, 37.6173, "Москва")
+_SEED_FALLBACK = (50.0619, 19.9368, "Краков")
 
 
 def _fallback(lat, lon, place_name, _seed=_SEED_FALLBACK):

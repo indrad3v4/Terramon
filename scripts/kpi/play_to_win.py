@@ -38,10 +38,10 @@ THOUGHTS = [
     ("Lover", "I want to be close to you — love is all that matters, I give you my whole heart, being with you is enough."),
 ]
 
-# M1: simulated device geolocation permission (Moscow). Honest note: this is Playwright
+# M1: simulated device geolocation permission (Kraków). Honest note: this is Playwright
 # grant_permissions + set_geolocation, i.e. we emulate what a real device would grant —
 # the app's capture_location (⟳) then resolves navigator.geolocation with these coords.
-GEO_LAT, GEO_LON = 55.7558, 37.6173
+GEO_LAT, GEO_LON = 50.0619, 19.9368
 CAP = 12
 
 def dismiss_modal(page):
@@ -95,7 +95,7 @@ def evidence(page, tag):
     return {"imgs": imgs, "oye_buttons": oye, "body_len": len(body)}
 
 def setup_geo(ctx):
-    """M1: grant geolocation + set Moscow coords BEFORE navigation."""
+    """M1: grant geolocation + set Kraków coords BEFORE navigation."""
     ctx.grant_permissions(["geolocation"], origin=URL)
     try:
         # new-style API: keyword args
@@ -219,7 +219,7 @@ with sync_playwright() as p:
             break
         round_no += 1
         ctx = browser.new_context(viewport={"width": 414, "height": 896})
-        # M1: geolocation permission + Moscow coords BEFORE navigation
+        # M1: geolocation permission + Kraków coords BEFORE navigation
         try:
             setup_geo(ctx)
             print(f"[round {round_no}] geo granted: {GEO_LAT}, {GEO_LON} (simulated device permission via Playwright)")
@@ -229,7 +229,7 @@ with sync_playwright() as p:
         # TMA env: inject the resilient window.Telegram.WebApp mock BEFORE
         # the app loads, so this round runs as a real TMA (platform android,
         # per-round player identity, LocationButton geo bridge auto-answered
-        # with the simulated Moscow coords — M1 via the TMA path).
+        # with the simulated Kraków coords — M1 via the TMA path).
         tma_setup = tma_env.setup_tma_env(
             page,
             user_id=710000000 + round_no,
@@ -381,7 +381,7 @@ with sync_playwright() as p:
     print("=== DISTINCT COUNT:", len(collected))
     print()
     print("=== NSS-EVIDENCE ===")
-    print("geo_sim: Playwright grant_permissions + set_geolocation (Moscow 55.7558, 37.6173) + '⟳' click —",
+    print("geo_sim: Playwright grant_permissions + set_geolocation (Kraków 50.0619, 19.9368) + '⟳' click —",
           "simulated device permission, NOT a real device (honest note)")
     print(f"geo_ok_rounds: {geo_ok_rounds}  (rounds where creature place contains coords != '0.00, 0.00')")
     print(f"distinct_archetypes: {len(collected)} -> {sorted(collected.keys())}")

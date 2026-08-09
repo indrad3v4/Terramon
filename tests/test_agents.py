@@ -117,11 +117,11 @@ def test_gm_validates_release_irreversible():
 
 
 def test_gm_geo_radius():
-    anchor_lat, anchor_lon = 55.7558, 37.6173  # Москва
+    anchor_lat, anchor_lon = 50.0619, 19.9368  # Краков (Рынек)
     creatures = [
-        {"name": "близко", "lat": 55.85, "lon": 37.55},            # ~11 км
-        _GeoCreature("на границе", 55.99, 37.99),                  # ~35 км
-        {"name": "далеко", "lat": 59.93, "lon": 30.33},            # ~630 км
+        {"name": "близко", "lat": 50.0455, "lon": 19.9549},            # Подгуже ~2.5 км
+        _GeoCreature("на границе", 50.4000, 20.0000),                  # ~38 км (близко к 50)
+        {"name": "далеко", "lat": 52.2297, "lon": 21.0122},            # Варшава ~250 км
     ]
 
     near = nearby_creatures(anchor_lat, anchor_lon, creatures, radius_km=50)
