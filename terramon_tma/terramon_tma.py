@@ -2134,313 +2134,6 @@ def progress_header() -> rx.Component:
     )
 
 
-def creature_card() -> rx.Component:
-    """The creature card. SIN 9 FIX: fade-in through style opacity."""
-    return rx.box(
-        rx.vstack(
-            # Phase 19: Portrait from registry with sigil fallback
-            rx.cond(
-                TerramonState.agent_portrait != "",
-                rx.image(
-                    src=TerramonState.agent_portrait,
-                    width="100px", height="100px",
-                    border_radius="12px",
-                    border="2px solid " + TerramonState.color,
-                    box_shadow=TerramonState.rarity_glow_style,
-                ),
-                rx.text(
-                    TerramonState.sigil,
-                    font_size="3em",
-                    color=TerramonState.color,
-                    text_shadow=TerramonState.rarity_glow_style,
-                ),
-            ),
-            rx.hstack(
-                rx.heading(TerramonState.agent, size="7", color=TerramonState.color),
-                # M7: minted collectible badge — GameBoy style, amber/gold
-                rx.cond(
-                    TerramonState.minted,
-                    rx.hstack(
-                        rx.text("💠", font_size="0.8em"),
-                        rx.text("MINTED", font_size="0.55em", color="#fbbf24",
-                                font_weight="bold", letter_spacing="0.12em"),
-                        spacing="1",
-                        align="center",
-                        background="#1a1405",
-                        border="1px solid #fbbf2444",
-                        border_radius="999px",
-                        padding="0.15em 0.6em",
-                    ),
-                    rx.fragment(),
-                ),
-                spacing="2",
-                align="center",
-            ),
-            rx.text('"' + TerramonState.thought + '"', font_style="italic",
-                    color="#e5e7eb", text_align="center"),
-            rx.text(TerramonState.lore, font_size="0.9em", color="#9ca3af"),
-            rx.text(TerramonState.reflection, font_size="0.8em", color="#a78bfa",
-                    text_align="center", max_width="360px"),
-            # B1/F1.1: Speech bubble — creature's LLM-generated greeting
-            rx.cond(
-                TerramonState.creature_greeting != "",
-                rx.box(
-                    rx.text(TerramonState.creature_greeting, font_size="0.85em",
-                            color="#d8b4fe", font_style="italic", text_align="center"),
-                    padding="0.5em 1em",
-                    background="#1e1e2a",
-                    border_radius="12px",
-                    border="1px solid #27272a",
-                    width="100%",
-                    max_width="340px",
-                    # Tail for speech bubble effect
-                    _before={
-                        "content": "''",
-                        "position": "absolute",
-                        "top": "-8px",
-                        "left": "20px",
-                        "border": "8px solid transparent",
-                        "border_bottom_color": "#1e1e2a",
-                    },
-                    position="relative",
-                ),
-                rx.fragment(),
-            ),
-            # FIX 2: INSIGHT line (the THEREFORE directive)
-            rx.cond(
-                TerramonState.insight != "",
-                rx.text(TerramonState.insight, font_size="0.8em", color="#c4b5fd",
-                        text_align="center", font_style="italic", max_width="360px"),
-                rx.fragment(),
-            ),
-            # B3/F1.3: Memory greeting based on last_seen
-            rx.cond(
-                TerramonState.memory_greeting != "",
-                rx.text(TerramonState.memory_greeting, font_size="0.7em",
-                        color="#a78bfa", text_align="center", font_style="italic",
-                        max_width="340px"),
-                rx.fragment(),
-            ),
-            rx.divider(),
-            # Level + collected + intelligence (SIN 10 typography hierarchy)
-            rx.hstack(
-                rx.text("Lv." + TerramonState.level.to_string(), color="#e5e7eb"),
-                rx.text("Встречено " + TerramonState.released_count.to_string()
-                        + " из 5", color="#e5e7eb"),
-                spacing="4",
-            ),
-            # Lesson 05: confidence
-            rx.hstack(
-                rx.text("Intelligence:", font_size="0.75em", color="#9ca3af"),
-                rx.text(TerramonState.intelligence.to_string() + "%",
-                        font_size="0.75em", color="#c4b5fd", font_weight="bold"),
-                spacing="1",
-            ),
-            # I03: Embedding drift — amber progress bar
-            rx.cond(
-                TerramonState.embedding_drift > 0,
-                rx.vstack(
-                    rx.hstack(
-                        rx.text("🧬 Evolved", font_size="0.7em", color="#f59e0b"),
-                        rx.text(TerramonState.embedding_drift.to_string() + "% since birth",
-                                font_size="0.7em", color="#f59e0b", font_weight="bold"),
-                        justify="between",
-                        width="100%",
-                    ),
-                    rx.box(
-                        rx.box(
-                            style={"width": TerramonState.embedding_drift.to_string() + "%",
-                                   "height": "100%",
-                                   "background": "linear-gradient(90deg, #f59e0b, #d97706)",
-                                   "border_radius": "999px",
-                                   "transition": "width 0.4s ease"},
-                        ),
-                        width="100%", height="6px",
-                        background="#27272a", border_radius="999px", overflow="hidden",
-                    ),
-                    width="100%",
-                    spacing="1",
-                ),
-                rx.fragment(),
-            ),
-            # Phase 19: BPE tokenizer status
-            rx.cond(
-                TerramonState.token_count > 0,
-                rx.text(
-                    "tokens: " + TerramonState.token_count.to_string()
-                    + " | archetype: " + TerramonState.token_archetype
-                    + " | confidence: " + (TerramonState.token_confidence * 100).to_string() + "%",
-                    font_size="0.65em", color="#6b7280", text_align="center",
-                ),
-                rx.fragment(),
-            ),
-            # Lesson 06: top-3 archetype probability sparkline bars
-            rx.vstack(
-                rx.foreach(
-                    TerramonState.archetype_probs,
-                    lambda item: rx.hstack(
-                        rx.text(item["name"], font_size="0.65em", color="#9ca3af", width="5em"),
-                        rx.box(
-                            rx.box(
-                                style={
-                                    "width": f"{int(item['prob'] * 100)}%",
-                                    "height": "6px",
-                                    "background": "#c4b5fd",
-                                    "border_radius": "999px",
-                                    "transition": "width 0.3s ease",
-                                },
-                            ),
-                            width="100%", height="6px",
-                            background="#27272a", border_radius="999px", overflow="hidden",
-                        ),
-                        rx.text(f"{int(item['prob'] * 100)}%",
-                                font_size="0.65em", color="#6b7280", width="2.5em"),
-                        spacing="1",
-                        width="100%",
-                    ),
-                ),
-                width="100%",
-                spacing="1",
-            ),
-            # G04: birthplace — static map when lat/lon available, text fallback
-            rx.cond(
-                TerramonState.static_map_url != "",
-                rx.box(
-                    rx.image(
-                        src=TerramonState.static_map_url,
-                        width="100%",
-                        height="auto",
-                        border_radius="8px",
-                        border="1px solid #27272a",
-                    ),
-                    rx.cond(
-                        TerramonState.place != "",
-                        rx.text(TerramonState.place, font_size="0.65em",
-                                color="#6b7280", text_align="center", margin_top="0.3em"),
-                        rx.fragment(),
-                    ),
-                    # TERRA vision: creature opens its eyes on its birthplace
-                    rx.cond(
-                        TerramonState.home_lore != "",
-                        rx.text(
-                            TerramonState.home_lore,
-                            font_size="0.7em",
-                            color="#d4d4d8",
-                            font_style="italic",
-                            text_align="center",
-                            margin_top="0.3em",
-                            padding="0.4em 0.6em",
-                            background="rgba(255,255,255,0.04)",
-                            border_radius="6px",
-                            border="1px solid #27272a",
-                        ),
-                        rx.cond(
-                            TerramonState.home_lore_loading,
-                            rx.text("👁 the creature opens its eyes...",
-                                    font_size="0.7em", color="#f59e0b",
-                                    font_style="italic", text_align="center",
-                                    margin_top="0.3em"),
-                            rx.button(
-                                "👁 Open your eyes",
-                                on_click=TerramonState.see_birthplace,
-                                size="1", variant="ghost", color_scheme="gray",
-                                font_size="0.65em", margin_top="0.3em",
-                            ),
-                        ),
-                    ),
-                    width="100%",
-                ),
-                rx.cond(
-                    TerramonState.place != "",
-                    rx.hstack(
-                        rx.text("📍", font_size="0.8em"),
-                        rx.text(TerramonState.place, font_size="0.75em",
-                                color="#6b7280", font_style="italic"),
-                        spacing="1",
-                        align="center",
-                    ),
-                    rx.fragment(),
-                ),
-            ),
-            # SIN 8: MINT with explanation tooltip
-            rx.cond(
-                TerramonState.price_sats > 0,
-                rx.cond(
-                    TerramonState.can_mint,
-                    rx.tooltip(
-                        rx.button(
-                            "⚡ MINT · " + TerramonState.price_sats.to_string() + " sats",
-                            on_click=TerramonState.mint_creature,
-                            background=TerramonState.color,
-                            color="#0b0b0f",
-                            width="100%",
-                            _hover={"transform": "scale(1.02)", "opacity": "0.9"},
-                            style={"transition": "all 0.15s ease"},
-                        ),
-                        content="Mint this creature to Telegram Stars — tradable collectible on-chain",
-                    ),
-                    rx.text("locked · train more", color="#6b7280", font_size="0.85em"),
-                ),
-                rx.text("free summon", color="#6b7280", font_size="0.85em"),
-            ),
-            # Phase 4: Share button (virality)
-            rx.button(
-                "📤 Share",
-                on_click=TerramonState.share_creature,
-                variant="surface", size="2", width="100%",
-                color_scheme="gray",
-                margin_top="0.25em",
-            ),
-            # Phase 19: Subtle safety note when content is flagged
-            rx.cond(
-                TerramonState.safety_flagged,
-                rx.text(
-                    "content advisory: " + TerramonState.safety_reason,
-                    font_size="0.6em", color="#6b7280", font_style="italic",
-                    text_align="center", max_width="340px",
-                ),
-                rx.fragment(),
-            ),
-            # SIN 11: goal celebration with visual weight
-            rx.cond(
-                TerramonState.goal_reached,
-                rx.vstack(
-                    rx.text("✦", color="#f59e0b", font_size="2em"),
-                    rx.text("GOAL REACHED — you are a Tamer!", color="#f59e0b",
-                            font_weight="bold", font_size="1.1em", text_align="center"),
-                    rx.text(
-                        "Your terra is awake. The creatures remember you. "
-                        "Come back — they evolve.",
-                        color="#d8b4fe",
-                        font_size="0.85em",
-                        font_style="italic",
-                        text_align="center",
-                        max_width="340px",
-                    ),
-                    spacing="2",
-                    align="center",
-                    padding="0.5em",
-                    border="1px solid #f59e0b44",
-                    border_radius="12px",
-                ),
-                rx.fragment(),
-            ),
-            spacing="3",
-            align="center",
-        ),
-        border="1px solid #27272a",
-        border_left="4px solid " + TerramonState.color,
-        border_radius="16px",
-        padding="1.5em",
-        background="linear-gradient(135deg, #141418 60%, #1a1a24 100%)",  # SIN 2: gradient
-        box_shadow=TerramonState.rarity_glow_style,  # SIN 1: aura glow
-        width="100%",
-        max_width="380px",
-        # SIN 9: fade-in via transition on component mount
-        style={"transition": "opacity 0.35s ease"},
-    )
-
-
 def creature_care_panel() -> rx.Component:
     """Tamagotchi×Pokemon interaction panel — shows stats + interaction buttons."""
     return rx.cond(
@@ -2468,12 +2161,28 @@ def creature_care_panel() -> rx.Component:
                         ),
                         rx.fragment(),
                     ),
+                    # M7: minted collectible badge — GameBoy style, amber/gold
+                    rx.cond(
+                        TerramonState.minted,
+                        rx.hstack(
+                            rx.text("💠", font_size="0.8em"),
+                            rx.text("MINTED", font_size="0.55em", color="#fbbf24",
+                                    font_weight="bold", letter_spacing="0.12em"),
+                            spacing="1",
+                            align="center",
+                            background="#1a1405",
+                            border="1px solid #fbbf2444",
+                            border_radius="999px",
+                            padding="0.15em 0.6em",
+                        ),
+                        rx.fragment(),
+                    ),
                     spacing="2",
                 ),
-                # G04: birthplace map + TERRA vision (moved from dead creature_card()
-                # — creature_card was never called in index(); Reflex tree-shook it,
-                # so the map, 'Open your eyes' button and home_lore vanished from the
-                # production bundle. This block belongs to the LIVE panel.)
+                # G04: birthplace map + TERRA vision — the creature opens its eyes
+                # on its birthplace. (Formerly stranded in the removed creature_card();
+                # index() only renders this LIVE panel, so this map block, the MINT
+                # button and the Share button all live here.)
                 rx.cond(
                     TerramonState.static_map_url != "",
                     rx.box(
@@ -2532,6 +2241,35 @@ def creature_care_panel() -> rx.Component:
                         ),
                         rx.fragment(),
                     ),
+                ),
+                # SIN 8: MINT with explanation tooltip
+                rx.cond(
+                    TerramonState.price_sats > 0,
+                    rx.cond(
+                        TerramonState.can_mint,
+                        rx.tooltip(
+                            rx.button(
+                                "⚡ MINT · " + TerramonState.price_sats.to_string() + " sats",
+                                on_click=TerramonState.mint_creature,
+                                background=TerramonState.color,
+                                color="#0b0b0f",
+                                width="100%",
+                                _hover={"transform": "scale(1.02)", "opacity": "0.9"},
+                                style={"transition": "all 0.15s ease"},
+                            ),
+                            content="Mint this creature to Telegram Stars — tradable collectible on-chain",
+                        ),
+                        rx.text("locked · train more", color="#6b7280", font_size="0.85em"),
+                    ),
+                    rx.text("free summon", color="#6b7280", font_size="0.85em"),
+                ),
+                # Phase 4: Share button (virality)
+                rx.button(
+                    "📤 Share",
+                    on_click=TerramonState.share_creature,
+                    variant="surface", size="2", width="100%",
+                    color_scheme="gray",
+                    margin_top="0.25em",
                 ),
                 # Phase 19: Creature state + mood + day/night indicator
                 rx.hstack(
@@ -3748,7 +3486,8 @@ def index() -> rx.Component:
                 # ── ZONE 3: Input + Action buttons (or F3 payment gate) ──
                 rx.cond(
                     # F3 — show payment gate after free summon used
-                    TerramonState.summon_count > 0 & ~TerramonState.unlocked,
+                    # F3 gate: parentheses REQUIRED — "&" binds tighter than ">" in Python; without them unlocked is dead code.
+                    (TerramonState.summon_count > 0) & ~TerramonState.unlocked,
                     payment_gate(),
                     # Normal input + action buttons
                     rx.vstack(
