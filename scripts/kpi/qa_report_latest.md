@@ -1,68 +1,75 @@
-# Terramon — North Star Gap Report (v2) · 2026-08-09 (Iter-7)
+# Terramon — North Star Gap Report (v2) · 2026-08-09 (Iter-8)
 
-Fingerprint деплоя: 138b7628625e5b2d (ae3a162, live) · Бандлы: _index-B4NNXZbm.js, root-BBPU-gMk.js (+8) · Playwright/Chromium · Target: https://terramon-tma-production.up.railway.app/
+Fingerprint деплоя: 8efa65ac53336e0a (live) · Бандлы: _index-BDHI-iE_.js, root-DBvl26DB.js (+8) · Playwright/Chromium · Target: https://terramon-tma-production.up.railway.app/
 
 ---
 
 ## 0. ВЕРДИКТ ДНЯ (TL;DR)
 
-- **North Star Score: 58/100** (▲▲ с 2/100: гейт починен, win-path открыт, MintLoop замкнут)
-- Топ-3 блокера: **1) M3 win-path 8/12 (мысли KPI дают дубли — классификатор может все 12) 2) M1/M2 evidence меряется слишком рано (гео РАБОТАЕТ — round 1 дал карту Москвы) 3) M7: mint_count=1 — артефакт KPI-клика «Mint (1 Star)», не реальный платёж**
-- Kill-condition монитор: share нет данных · mint **1** (артефакт KPI) · дней с mint=0: 8+/30 → **KILL-RISK (сохраняется)**
-- ✅ 368/368 тестов · reflex export — OK (проверяется в этой итерации)
+- **North Star Score: 75/100** (▲▲ с 58/100: win-path 12/12 подтверждён в live, M1-измерение починено — гео-цепочка доказана)
+- Топ-3 блокера: **1) M7 MintLoop=0 — нет ни одного реального settle (нужен Alby LSP-фонд + платёж владельца) 2) M6 share — нет счётчика тапов в коде 3) M8 D7 — player_count=0 (нужны реальные игроки)**
+- Kill-condition монитор: share нет данных · mint **0** · дней с mint=0: 9+/30 → **KILL-RISK (сохраняется)**
+- ✅ 377/377 тестов (372 → +5) · reflex export — OK · KPI-прогон: 0 failed rounds
 
 ## 1. NORTH STAR SCORE (композит)
 
 | Компонент | Вес | Сегодня | Нормализация |
 |---|---|---|---|
-| Geo-привязка | 25 | 0% по evidence (гео-путь РАБОТАЕТ — round 1 дал static-map Москвы; evidence снимался до рендера) | доля существ с lat≠0 && lon≠0 |
-| Vision-lore («Open your eyes») | 25 | 1 (кнопка + лор в DOM при гео; OYE найден на Care re-check) | 1 = кнопка в DOM + лор рендерится |
-| Win-path (достижимость) | 25 | 8/12 = 16.7 (классификатор выдаёт все 12 — мысли KPI дублируются) | min(архетипов/12, 1) |
-| Mint-loop | 25 | 1 (mint_count 0→1 за прогон — цикл замкнут, НО артефакт: KPI кликнул «Mint (1 Star)» = buy_stars optimistic) | 1 = LN-инвойс → mint-событие → счётчик |
-| **ИТОГО** | 100 | **58/100** | |
+| Geo-привязка | 25 | **100%** (map-URL coords, 12/12 раундов static-map с реальными 50.0619,19.9368) | доля существ с lat≠0 && lon≠0 |
+| Vision-lore («Open your eyes») | 25 | 1 (кнопка 12/12 раундов, лор рендерится) | 1 = кнопка в DOM + лор рендерится |
+| Win-path (достижимость) | 25 | **12/12** (live-коллекция: все 12 архетипов существуют на проде) | min(архетипов/12, 1) |
+| Mint-loop | 25 | 0 (mint_count=0, settle не случался; гейт-проба: gate_seen=false — см. §3) | 1 = LN-инвойс → mint-событие → счётчик |
+| **ИТОГО** | 100 | **75/100** | |
 
 Боевая формула (когда появятся реальные игроки): NSS = 40·MintRate + 30·D7 + 15·Geo + 15·Lore.
 
-## 2. ГЭП-ТАБЛИЦА
+## 2. ГЭП-ТАБЛИЦА (мост «инженерия → северная звезда»)
 
-| # | Метрика | Сегодня | Цель | Гэп | Блокирует | Измерение |
-|---|---|---|---|---|---|---|
-| M1 | Geo% | 0% (evidence-баг KPI; гео-путь доказан: TMA LocationButton → on_coords → static-map 55.7558,37.6173 в round 1) | 100% | 🟡 замер, не код | share-петлю + vision-lore | AUTO |
-| M2 | Vision-lore | 1 (кнопка OYE в DOM; лор рендерится при static_map_url != "") | 1 | 🟢 ок | эмоцию/арт | AUTO |
-| M3 | Win-path | 8/12 (Sage, Explorer, Magician, Creator, Hero, Orphan, Ruler, Jester; дубли: Rebel→Explorer, Caregiver→Orphan, Innocent→Orphan, Lover→Explorer) | 12/12 | 🟡 мысли KPI, не игра | контентную глубину → D7 | AUTO |
-| M4 | Дубликаты | unique 8 / total 12 = 0.67 (роутер детерминирован; dedup-guard работает) | 1.0 | 🟡 | экономику минта | AUTO |
-| M5 | Фрикция гейта | ✅ 0 блоков (гейт починен в b094567; 12/12 раундов прошли) | 0 блоков | 🟢 ок | плавность онбординга | AUTO |
-| M6 | Share-funnel | нет данных (кнопка «📤 Share» в живом UI) | ≥2% share | 🔴 нет данных | рост охвата (kill-condition) | **NEEDS-CODE** |
-| M7 | Mint rate | mint_count=1 — **артефакт**: KPI кликнул «Mint (1 Star)» (гейт-кнопка = buy_stars optimistic). Реального платежа НЕТ | ≥2% | 🟡 loop замкнут, нужен реальный settle | саму северную звезду | **NEEDS-DEVICE** |
-| M8 | D7 retention | player_count=0, returning_players_7d=0 (KPI-initData с FAKE hash не проходит verify — честно) | кохортный бенчмарк | 🔴 нет данных | северную звезду (2-я половина) | **NEEDS-CODE** |
+| # | Метрика | Что меряет | Сегодня | Цель | Гэп | Блокирует | Измерение |
+|---|---|---|---|---|---|---|---|
+| M1 | Geo% | доля существ с реальными координатами | 100% (map-URL; headless-симуляция, ждёт device-проверки) | 100% | 🟢 ок (измерение починено) | share-петлю | AUTO |
+| M2 | Vision-lore | кнопка «Open your eyes» + рендер лора | 1 (12/12) | 1 | 🟢 ок | эмоцию/арт | AUTO |
+| M3 | Win-path | уникальные архетипы на проде | 12/12 | 12/12 | 🟢 ок | контентную глубину → D7 | AUTO |
+| M4 | Дубликаты | unique/total | 12/12 = 1.0 (dedup-guard работает: повторная мысль НЕ создаёт дубль) | 1.0 | 🟢 ок | экономику минта | AUTO |
+| M5 | Фрикция гейта | перехват pointer-events, гейт «Summon (1 Star)» | 0 блоков (0 failed rounds) | 0 блоков | 🟢 ок | плавность онбординга | AUTO |
+| M6 | Share-funnel | доля сессий с share-тапом | нет данных (кнопка «📤 Share» в UI есть, счётчика нет) | ≥2% share (kill <2%) | 🔴 NEEDS-CODE | рост охвата (kill-condition) | **NEEDS-CODE** |
+| M7 | Mint rate | % саммонеров, сделавших mint | mint_count=0; loop в коде есть (инвойс→settle→mint), settle не случался | ≥2% (kill: <2% & mint=0 за 30 дн) | 🔴 структурный | саму северную звезду | **NEEDS-DEVICE** |
+| M8 | D7 retention | возврат на 7-й день | player_count=0 (KPI-initData FAKE hash отклоняется verify — честно) | кохортный бенчмарк | 🔴 нет данных | северную звезду (2-я половина) | **NEEDS-PLAYERS** |
 
-Регрессионные guard (AUTO): 368/368 ✅ · gate-паттерн `(sc > 0) & ~unlocked` ✅ · MINT/Share в бандле ✅ · static-map 1× (round 1, Москва) ✅.
+Регрессионные guard (AUTO): 377/377 ✅ · KPI не кликает mint-кнопки (presence-only) ✅ · geo-координаты читаются из map-URL ✅ · гейт-проба честно логирует gate_seen ✅.
 
 ## 3. ТОП-3 БЛОКЕРА (ранжировано)
 
-1. **M3 win-path 8/12 — мысли KPI дают дубли.** Роутер детерминированный (эмбеддинг-классификатор): текущие 12 мыслей KPI маппятся на 8 архетипов (Rebel→Explorer, Caregiver→Orphan, Innocent→Orphan, Lover→Explorer). **Классификатор МОЖЕТ выдать все 12** — подобраны и офлайн-проверены мысли для Rebel/Caregiver/Innocent/Lover. → Фикс: заменить 4 мысли в play_to_win.py + регрессионный тест «12 мыслей → 12 архетипов».
-2. **M1/M2 evidence снимается до рендера.** KPI читает место/карту сразу после summon — статик-мапа ещё нет; Care re-check (через 1.5с) УЖЕ находит static-map Москвы + OYE. → Фикс: M1/M2 evidence брать из Care re-check (m2_after_care), а не из раннего снапшота.
-3. **M7 mint_count=1 — KPI-артефакт.** wait_result кликает «Mint (1 Star)» как гейт, но после ae3a162 это buy_stars → optimistic _record_mint. Прогон САМ создал mint на проде. → Фикс: KPI больше НЕ кликает mint-кнопку (только логирует присутствие); реальный mint — manual step владельца (Alby settle / Stars invoice).
+1. **M7 MintLoop=0 — структурный.** Цикл в коде замкнут (pay_lightning → BOLT11-инвойс на Alby Hub → verify_lightning → _record_mint → /health mint_count), НО ни один инвойс не был оплачен: mint_count=0, player_count=0. Гейт-проба KPI в этом прогоне честно вернула `gate_seen: false` — ВАЖНОЕ ОТКРЫТИЕ: все 12 мыслей KPI уже засеяны на проде → срабатывает dedup-guard → summon_count не растёт → гейт (условие `summon_count>0 & ~unlocked`) не рендерится. → Фикс (код, след. итерация): гейт-проба с run-unique мыслью, чтобы гейт реально открылся и мы увидели статус инвойса (Alby настроен или нет). → Фикс (владелец, manual): залить sats в Alby Hub (incoming liquidity ≥3000), прописать ALBY_HUB_URL/ALBY_HUB_API_KEY на Railway, оплатить инвойс с реального кошелька → mint_count=1 → MintLoop=1 → NSS 100.
+2. **M6 Share-funnel — NEEDS-CODE.** Кнопка «📤 Share» есть, но тап нигде не считается → метрика «нет данных» навсегда. → Фикс: счётчик share-тапов (персист), /health share_count, KPI-проба клика по Share (клик по share безопасен — не создаёт mint).
+3. **M8 D7 — NEEDS-PLAYERS.** player_count=0 — KPI-initData с FAKE hash корректно отклоняется verify_init_data (не загрязняем D7-кохорты — правильно). Нужны реальные игроки (owner: пригласить тестеров через бота @terramon_bot) → тогда /health player_count/returning_players_7d начнут расти.
 
 ## 4. EVIDENCE
 
-Screenshots: /tmp/terramon_new_win_1.png (round 1: Sage + static-map Москва), _terra.png (коллекция 8 unique / 12 total), _ERR отсутствуют (0 failed rounds). Бандлы: /tmp/live_root2.js, /tmp/live_index_bundle.js (Mint (1 Star) 1×, Open your eyes 1×, Pay with Lightning 1×; player_count/seed_count ОТСУТСТВУЮТ — правки Iter-6 не в live).
+Прогон KPI (после фикса измерения): `geo_ok: True (body: False, map-url: True)` — карта static-map?lat=50.0619&lon=19.9368 рендерится, KPI теперь читает координаты из URL, а не только из текста (place_name человекочитаемый — «Kraków, Poland», regex по телу не срабатывал — это был баг замера, не кода). 0 failed rounds. OYE 1. Win-path 12/12 из live-коллекции. mint_count_health: 0. Гейт-проба: gate_seen=false (dedup, см. §3).
+
+Screenshots: /tmp/terramon_new_win_1.png, /tmp/terramon_new_win_1_terra.png (live-коллекция 12 архетипов).
 
 NOTES:
-- **M1 честно**: headless-гео симулируется (grant_permissions + set_geolocation + TMA LocationButton auto-emit). Round 1: static-map?lat=55.7558&lon=37.6173 в Care re-check → гео-цепочка РАБОТАЕТ. geo_ok=0 по раннему evidence — баг замера, не кода.
-- **M7 честно**: mint_count 0→1 за прогон = wait_result кликнул «Mint (1 Star)» (гейт-локатор устарел после ae3a162). open_invoice_calls: 1 (TMA mock). Это НЕ реальный платёж — артефакт. Цикл (клик → buy_stars → _record_mint → /health mint_count) доказан.
-- **M8 честно**: player_count=0 — KPI-initData hash FAKE → verify_init_data отклоняет → игроки не пишутся. Правильно (не загрязняем D7-кохорты KPI-прогонами).
-- **Iter-6 локальные правки** (celebration_pending, per-session geo, seed backfill, health seed_count + tests) — на диске, 368 passed, НЕ в origin/main → пуш в этой итерации.
-- **TMA**: 12/12 раундов webapp_present, haptic 12, location_requests 2, location_accessed_emitted 1.
+- **M1 честно**: гео симулируется (Playwright grant_permissions + set_geolocation + TMA LocationButton auto-emit 50.0619,19.9368). Цепочка доказана end-to-end: TMA mock → on_coords → GeoContext → seed с lat/lon → static_map_url с реальными координатами. Headless ≠ устройство: финальная device-проверка за владельцем (открыть в Telegram на телефоне, разрешить геолокацию).
+- **M7 честно**: клик по «Pay with Lightning» в гейт-пробе БЕЗОПАСЕН (создаёт инвойс, не платит, mint не записывает). В этом прогоне гейт не открылся из-за dedup — записано честно, не подделано. Mint-кнопки («⚡ MINT»/«Mint (1 Star)») KPI НЕ кликает (presence-only) — mint_count не фабрикуется.
+- **M8 честно**: player_count=0 — KPI-initData hash FAKE → verify_init_data отклоняет → игроки не пишутся. Правильно.
+- **Iter-8 правки**: play_to_win.py (+62/−4): helper `geo_ok_from_map_url` (координаты из static-map URL) + гейт-проба `m7_gate_probe` (round 1, клик Pay-with-Lightning один раз, чтение invoice-статуса). tests/test_kpi_geo_gate.py (+5 тестов): контракты geo-хелпера, гейт-пробы, presence-only mint-политики, 12 архетипов.
 
 ## 5. ЧТО ДЕЛАЕТСЯ В ЭТОЙ ИТЕРАЦИИ / ЧТО ДАЛЬШЕ
 
-**План (2 батча сабагентов):**
-1. SA1 (play_to_win.py): заменить 4 мысли-дубля на проверенные (Rebel/Caregiver/Innocent/Lover) → win-path 12/12; evidence M1/M2 из Care re-check; убрать клик «Mint (1 Star)» (артефакт-генератор).
-2. SA2 (tests/test_winpath_thoughts.py): офлайн-тест «12 мыслей KPI → 12 уникальных архетипов» (читает play_to_win.py текстом, не импортируя) + тест «KPI не кликает mint».
-3. Пуш Iter-6 правок + KPI-фиксы одним коммитом → Railway передеплоит → следующий прогон перемерит M1/M3 честно.
+**Сделано:**
+1. SA1 — scripts/kpi/play_to_win.py: M1-измерение починено (map-URL coords = реальное гео-доказательство), добавлена M7 гейт-проба (честный статус инвойса), presence-only mint-политика сохранена.
+2. SA2 — tests/test_kpi_geo_gate.py: 5 регрессионных контрактов (стиль test_iter6_regression.py, offline source-level).
+3. Верификация: py_compile OK · 377 passed (372→+5) · reflex export OK · KPI-прогон 0 failed.
+4. Пуш одним коммитом → Railway передеплоит → следующий фингерпринт перемерит.
+
+**План след. итерации:**
+1. Гейт-проба с run-unique мыслью (обход dedup) → увидим реальный статус Alby-инвойса на проде (настроен/нет) — это решит, нужен ли владельцу только LSP-фонд или и конфиг.
+2. M6: счётчик share-тапов + /health share_count + KPI-проба Share.
+3. Проверить, что /health tests=84 — это хардкод; синхронизировать с реальным числом (косметика, низкий приоритет).
 
 **Owner-action (manual steps):**
-1. Реальный mint: оплатить гейт-инвойс 3000 sats с Alby-кошелька (или Stars от @BotFather) → mint_count ≥ 2 с реальным settle.
-2. Проверить геолокацию на устройстве в Telegram (LocationButton) — путь `tg.WebApp.LocationButton`.
-3. (Опционально) Настроить _STARS_INVOICE_URL от @BotFather — сейчас заглушка.
+1. **M7 (главное)**: залить ≥3000 sats в Alby Hub (LSP/канал), убедиться что ALBY_HUB_URL + ALBY_HUB_API_KEY заданы на Railway; оплатить один инвойс с реального LN-кошелька → mint_count ≥ 1 → MintLoop=1. Либо настроить настоящий Stars-инвойс от @BotFather (сейчас заглушка https://t.me/terramon_bot/TERRAMON_STAR_INVOICE).
+2. **M1**: открыть игру в Telegram на телефоне, разрешить геолокацию → проверить «📍 Kraków» на карточке существа (device-подтверждение гео).
+3. **M8**: пригласить первых реальных игроков в @terramon_bot → /health начнёт показывать player_count>0.

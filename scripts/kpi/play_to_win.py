@@ -1,5 +1,5 @@
 from playwright.sync_api import sync_playwright
-import argparse, os, re, json, urllib.request
+import argparse, os, re, json, urllib.request, urllib.parse
 
 try:
     from scripts.kpi import tma_env
@@ -149,6 +149,26 @@ def collect_m2_evidence(page):
             map_img = True
             break
     return {"geo_ok": geo_ok, "oye": oye, "map_img": map_img, "place": place}, body
+
+def geo_ok_from_map_url(srcs):
+    """M1 geo evidence from the static-map <img> URL (authoritative): True if any
+    src is a static-map URL whose lat AND lon query params are both non-zero.
+    The UI shows a human place_name ('Kraków, Poland' style), so the body-text
+    coords regex in collect_m2_evidence finds nothing — but the seed persisted
+    REAL lat/lon, proven by static_map_url() returning '' when agent_lat/lon are
+    0 and a real coords URL (lat/lon query params) otherwise."""
+    for src in srcs or []:
+        if not src or "static-map" not in src:
+            continue
+        try:
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(src).query)
+            lat = qs.get("lat", ["0"])[0]
+            lon = qs.get("lon", ["0"])[0]
+            if float(lat) != 0.0 and float(lon) != 0.0:
+                return True
+        except (ValueError, TypeError, IndexError):
+            continue
+    return False
 
 def m7_check(page):
     """M7: mint-loop evidence. Click 'Pay with Lightning' ONCE if payment_gate visible,
@@ -324,7 +344,7 @@ with sync_playwright() as p:
                 care_body = page.locator("body").inner_text()
                 care_coords = re.findall(r"-?\d+\.\d+\s*,\s*-?\d+\.\d+", care_body)
                 place_after_care = care_coords[0] if care_coords else None
-                geo_ok_after_care = bool(place_after_care) and place_after_care.replace(" ", "") not in ("0.00,0.00",)
+                geo_ok_body = bool(place_after_care) and place_after_care.replace(" ", "") not in ("0.00,0.00",)
                 oye_after_care = page.locator("button:has-text('Open your eyes')").count()
                 map_imgs_after_care = [
                     page.locator("img").nth(i).get_attribute("src")
@@ -332,13 +352,21 @@ with sync_playwright() as p:
                     if "static-map" in (page.locator("img").nth(i).get_attribute("src") or "")
                     or "yandex" in (page.locator("img").nth(i).get_attribute("src") or "")
                 ]
+                # M1 geo evidence fix: the UI shows a human place_name ('Kraków,
+                # Poland' style), so the body-text coords regex finds nothing.
+                # The static-map <img> URL carries the REAL lat/lon (static_map_url
+                # returns '' when agent_lat/lon are 0) — count either source.
+                geo_ok_map_url = geo_ok_from_map_url(map_imgs_after_care)
+                geo_ok_after_care = geo_ok_map_url or geo_ok_body
                 rlog["m2_after_care"] = {
                     "oye": oye_after_care,
                     "map_imgs": map_imgs_after_care,
                     "geo_ok": geo_ok_after_care,
                     "place": place_after_care,
+                    "geo_ok_body": geo_ok_body,
+                    "geo_ok_map_url": geo_ok_map_url,
                 }
-                print(f"   -> main-card (Care tab) OYE: {oye_after_care}, map: {map_imgs_after_care}, geo_ok: {geo_ok_after_care} ({place_after_care})")
+                print(f"   -> main-card (Care tab) OYE: {oye_after_care}, map: {map_imgs_after_care}, geo_ok: {geo_ok_after_care} (body: {geo_ok_body}, map-url: {geo_ok_map_url}, place: {place_after_care})")
                 # NSS M1/M2 evidence from the re-check (static map visible by now)
                 if geo_ok_after_care:
                     geo_ok_rounds.append(round_no)
@@ -346,6 +374,34 @@ with sync_playwright() as p:
             except Exception as e:
                 rlog["m2_after_care"] = {"oye": 0, "map_imgs": [], "geo_ok": False, "error": str(e)[:120]}
                 print(f"   -> main-card (Care tab) re-check failed (not fatal): {str(e)[:120]}")
+
+            # M7 payment-gate probe (round 1 only): after the 1st summon of a
+            # fresh session, payment_gate() replaces the input area (summon_count>0
+            # AND ~unlocked). Probe it live: wait up to 5s for 'Pay with Lightning'
+            # to render, click it ONCE (pay_lightning creates a real BOLT11 invoice
+            # on Alby Hub when ALBY_HUB_URL/ALBY_HUB_API_KEY are set on prod, else
+            # sets agent_message '⚡ Lightning not configured yet' — honest evidence
+            # either way, NO payment is made). KPI policy: NEVER click any mint
+            # button ('⚡ MINT'/'Mint (1 Star)') and never '✅ I've paid — verify'.
+            if round_no == 1:
+                gate_probe = {"gate_seen": False, "invoice_msg": None}
+                try:
+                    gate_btn = page.locator("button:has-text('Pay with Lightning')").first
+                    gate_btn.wait_for(state="visible", timeout=5000)
+                    gate_probe["gate_seen"] = True
+                    gate_btn.click(timeout=4000)
+                    print("   [m7-gate-probe] clicked 'Pay with Lightning' once (no payment attempted)")
+                    page.wait_for_timeout(2500)
+                    gate_body = page.locator("body").inner_text()
+                    for marker in ("⚡ Invoice ready", "⚡ Lightning not configured",
+                                   "⚡ Invoice failed", "⚡ Verify failed"):
+                        if marker in gate_body:
+                            gate_probe["invoice_msg"] = marker
+                            break
+                except Exception as e:
+                    print(f"   [m7-gate-probe] gate not visible within 5s (or click failed): {str(e)[:120]}")
+                rlog["m7_gate_probe"] = gate_probe
+                print(f"[m7-gate-probe] {json.dumps(gate_probe, ensure_ascii=False)}")
 
             # main card evidence (static-map imgs on collection cards)
             map_imgs = [page.locator("img").nth(i).get_attribute("src") for i in range(page.locator("img").count()) if "static-map" in (page.locator("img").nth(i).get_attribute("src") or "")]
@@ -383,11 +439,13 @@ with sync_playwright() as p:
     print("=== NSS-EVIDENCE ===")
     print("geo_sim: Playwright grant_permissions + set_geolocation (Kraków 50.0619, 19.9368) + '⟳' click —",
           "simulated device permission, NOT a real device (honest note)")
-    print(f"geo_ok_rounds: {geo_ok_rounds}  (rounds where creature place contains coords != '0.00, 0.00')")
+    print(f"geo_ok_rounds: {geo_ok_rounds}  (geo_ok_rounds now counts map-URL coords OR body-text coords; body coords = place contains coords != '0.00, 0.00')")
     print(f"distinct_archetypes: {len(collected)} -> {sorted(collected.keys())}")
     print(f"oye_buttons_total: {oye_total}")
     print(f"mint_button_presence: {mint_presence}  (round -> count of mint buttons '⚡ MINT'/'Mint (1 Star)' in DOM; never clicked)")
     print(f"invoice_ok: {invoice_ok_rounds if invoice_ok_rounds else 'no invoice message observed (payment_gate not seen or no agent_message)'}")
+    m7_gate_probe = next((r.get("m7_gate_probe") for r in round_log if r.get("m7_gate_probe") is not None), None)
+    print(f"m7_gate_probe (round 1): {json.dumps(m7_gate_probe, ensure_ascii=False) if m7_gate_probe else 'not probed'}  (payment_gate renders after the 1st summon; invoice status from pay_lightning agent_message)")
     mc = fetch_mint_count()
     print(f"mint_count_health: {mc}  (from /health, json mint_count)")
     print(f"main_card_oye_after_care: {sum(1 for r in round_log if r.get('m2_after_care', {}).get('oye', 0))}")
