@@ -4358,7 +4358,7 @@ def health(request):
         share_count = _restored_share
     return JSONResponse({
         "status": "ok",
-        "tests": 458,  # pytest count, synced at iter-19 (durability snapshot/restore + KPI deep-link probe)
+        "tests": 466,  # pytest count, synced at portrait-fix (Lesson 13, +8 portrait_serve tests)
         "data_persisted": data_persisted,
         "data_restored_from_snapshot": bool(
             getattr(sys.modules.get(__name__), "_SNAPSHOT_RESTORED", False)
