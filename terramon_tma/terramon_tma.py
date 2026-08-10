@@ -158,6 +158,19 @@ _BOOT_MARKER = Path("data/boot_epoch.json")
 DATA_PERSISTED = False
 try:
     _boot_survived = _BOOT_MARKER.exists()  # True ⇒ data dir survived last boot
+    # iter-16: capture the PREVIOUS boot's marker mtime BEFORE os.replace
+    # below overwrites it. Root cause of the prod 2026-08-10 false positive
+    # (seed_count 19→0 with data_persisted=true): .dockerignore only excluded
+    # data/*.jsonl, so data/boot_epoch.json in the local build context got
+    # BAKED INTO the image at /app/data/boot_epoch.json. On a wiped/missing
+    # volume the marker still "exists" (image file) and JsonMemory.__init__
+    # above already recreated an EMPTY tma_memory.jsonl — comparing that
+    # fresh file against the freshly written marker's mtime reported
+    # DATA_PERSISTED=True with 0 seeds. Comparing against the PREVIOUS
+    # marker's mtime kills the false positive: a memory file recreated THIS
+    # boot (or written during the previous session) is never older than the
+    # previous boot's marker, so DATA_PERSISTED stays False for a wiped dir.
+    _prev_marker_mtime = _BOOT_MARKER.stat().st_mtime if _boot_survived else None
     _BOOT_MARKER.parent.mkdir(parents=True, exist_ok=True)
     _boot_tmp = _BOOT_MARKER.with_name(_BOOT_MARKER.name + ".tmp")
     _boot_tmp.write_text(
@@ -171,15 +184,17 @@ try:
         )
     )
     os.replace(_boot_tmp, _BOOT_MARKER)
-    # Age-based honesty (iter-15): the marker alone is a false positive when
-    # the data dir is wiped between boots (marker survives, memory gone).
+    # Age-based honesty (iter-15/16): the marker alone is a false positive
+    # when the data dir is wiped between boots (marker survives, memory gone).
     # DATA_PERSISTED only when a REAL data file from a previous boot exists —
-    # i.e. its mtime predates this boot's freshly written marker.
-    if _boot_survived:
+    # i.e. its mtime is strictly OLDER than the PREVIOUS boot's marker mtime
+    # (captured above, before os.replace) — never compared against the new
+    # marker, whose fresh mtime would bless a just-recreated empty memory.
+    if _boot_survived and _prev_marker_mtime is not None:
         try:
             _data_older = (
                 _MEMORY_PATH.exists()
-                and _MEMORY_PATH.stat().st_mtime < _BOOT_MARKER.stat().st_mtime
+                and _MEMORY_PATH.stat().st_mtime < _prev_marker_mtime
             )
             DATA_PERSISTED = _data_older
         except Exception:

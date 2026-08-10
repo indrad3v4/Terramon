@@ -73,7 +73,7 @@ def _tokens(text: str, remove_stop_words: bool = False) -> list[str]:
     text = preprocess_for_classifier(text)
     # Split compound words joined by hyphens, em-dashes, or slashes
     text = text.replace("-", " ").replace("—", " ").replace("/", " ").replace("'", " ' ")
-    words = re.findall(r"[a-z']+", text)
+    words = re.findall(r"[a-zа-яё']+", text)
 
     # Filter tokens: max length, stop word removal
     filtered: list[str] = []
@@ -374,6 +374,10 @@ class EmbeddingClassifier(ClassifierPort):
             "i can't handle this on my own",
             "please make the scary thing go away",
             "i pretend everything is fine because reality hurts",
+            # Russian (Cyrillic) — bright + shadow essence
+            "я просто хочу быть в безопасности",
+            "все будет хорошо, я верю в добро",
+            "не говорите мне правду, она слишком страшная",
         ],
         "Orphan": [
             "i don't belong anywhere",
@@ -387,6 +391,10 @@ class EmbeddingClassifier(ClassifierPort):
             "you don't really care you're just pretending",
             "i hate how happy they look without me",
             "nobody ever stays so why start now",
+            # Russian (Cyrillic) — bright + shadow essence
+            "я нигде не свой, хочу найти свое место",
+            "мы держимся вместе, мы не одиноки",
+            "у других все есть, а мне завидно",
         ],
         "Hero": [
             "i will overcome this",
@@ -400,6 +408,10 @@ class EmbeddingClassifier(ClassifierPort):
             "weakness is not an option",
             "i'll prove them all wrong no matter the cost",
             "asking for help is for people who aren't me",
+            # Russian (Cyrillic) — bright + shadow essence
+            "я буду храбрым и преодолею это испытание",
+            "моя задача — встать между опасностью и невинными и защитить слабых",
+            "храбрость и отвага ведут меня, я спасу всех",
         ],
         "Caregiver": [
             "let me help you",
@@ -413,6 +425,10 @@ class EmbeddingClassifier(ClassifierPort):
             "you need me whether you know it or not",
             "i can't say no even when i'm empty",
             "i'll fix you even if you didn't ask",
+            # Russian (Cyrillic) — bright + shadow essence
+            "я хочу заботиться о других и защищать беззащитных",
+            "твоя боль важна для меня, я рядом",
+            "я отдаю так много, а мне никто не возвращает",
         ],
         "Explorer": [
             "i want to see what's out there",
@@ -426,6 +442,10 @@ class EmbeddingClassifier(ClassifierPort):
             "i left because i was scared of staying",
             "every door i walk through i'm already eyeing the exit",
             "roots feel like chains to me",
+            # Russian (Cyrillic) — bright + shadow essence
+            "я хочу увидеть, что там за горизонтом",
+            "не запирайте меня, свобода — это все",
+            "мне тесно на одном месте, я боюсь остаться",
         ],
         "Rebel": [
             "rules are meant to be broken",
@@ -439,6 +459,10 @@ class EmbeddingClassifier(ClassifierPort):
             "burn it all there's nothing worth saving",
             "if you're not angry you're not paying attention",
             "i broke it because it deserved to break",
+            # Russian (Cyrillic) — bright + shadow essence
+            "правила созданы, чтобы их нарушать",
+            "я не пойду по их системе, революция начинается сейчас",
+            "я сожгу все дотла, там нечего спасать",
         ],
         "Lover": [
             "i want to be close to you",
@@ -452,6 +476,10 @@ class EmbeddingClassifier(ClassifierPort):
             "who am i when you're not here",
             "i saw you with them and it ruined my whole day",
             "i love you so much it scares me and you",
+            # Russian (Cyrillic) — bright + shadow essence
+            "я хочу быть рядом с тобой, любовь — это главное",
+            "я отдаю тебе все свое сердце",
+            "если ты уйдешь, я развалюсь на части",
         ],
         "Creator": [
             "i will build something new",
@@ -465,6 +493,10 @@ class EmbeddingClassifier(ClassifierPort):
             "if i can't make it perfect why bother",
             "i poured everything into this and nobody noticed",
             "the blank page terrifies me more than anything",
+            # Russian (Cyrillic) — bright + shadow essence
+            "я создам что-то новое из ничего",
+            "мое воображение безгранично, искусство — мое дыхание",
+            "оно никогда не достаточно хорошо, я бросаю все на полпути",
         ],
         "Jester": [
             "life is a joke enjoy it",
@@ -478,6 +510,10 @@ class EmbeddingClassifier(ClassifierPort):
             "why be real when you can be funny",
             "the moment gets heavy and i crack a joke to break it",
             "they think i'm happy but i'm just loud",
+            # Russian (Cyrillic) — bright + shadow essence
+            "жизнь — это шутка, смейся и радуйся",
+            "рассмеши их, смех — лучшее лекарство",
+            "если я перестану шутить, мне придется почувствовать боль",
         ],
         "Sage": [
             "the truth will set me free",
@@ -491,6 +527,10 @@ class EmbeddingClassifier(ClassifierPort):
             "i understand everything and connect with nothing",
             "analysis paralysis is my default state",
             "knowing the answer is easier than living it",
+            # Russian (Cyrillic) — bright + shadow essence
+            "истина освободит меня, я ищу мудрость и понимание",
+            "знание — сила, дай мне понять почему",
+            "я прочитал достаточно, чтобы знать, что ты не прав",
         ],
         "Magician": [
             "transform this situation",
@@ -504,6 +544,10 @@ class EmbeddingClassifier(ClassifierPort):
             "i don't need a plan i have faith",
             "i'll bend the truth until it fits my narrative",
             "spiritual bypass is my favorite avoidance strategy",
+            # Russian (Cyrillic) — bright + shadow essence
+            "я превращаю все вокруг, я творю перемены",
+            "верь, и оно придет, я умею творить чудеса",
+            "мне не нужен план, у меня есть вера",
         ],
         "Ruler": [
             "take charge of this situation",
@@ -517,6 +561,10 @@ class EmbeddingClassifier(ClassifierPort):
             "trust is earned through obedience",
             "i carry everything because nobody else can",
             "leadership means nobody gets close enough to see me falter",
+            # Russian (Cyrillic) — bright + shadow essence
+            "я веду людей, власть — мой путь",
+            "порядок из хаоса, я правлю",
+            "я несу все на себе, никто другой не справится",
         ],
     }
 

@@ -194,3 +194,68 @@ def test_data_persisted_age_based(source):
         "DATA_PERSISTED must be assigned from the age comparison "
         "(_data_older) — одного существования маркера недостаточно"
     )
+
+
+# ── 7: previous-boot marker mtime is captured BEFORE overwrite (iter-16) ─
+
+
+def test_prev_marker_mtime_captured_before_overwrite(source):
+    """iter-16: the age check must compare the memory file against the
+    PREVIOUS boot's marker mtime, captured BEFORE os.replace overwrites it.
+    Rationale: data/boot_epoch.json used to be baked into the Docker image
+    (build context), so on a wiped volume the marker still exists and
+    JsonMemory.__init__ recreates an EMPTY memory file — the old 'memory
+    older than the freshly written marker' check then reported
+    DATA_PERSISTED=True with 0 seeds (prod 2026-08-10: seed_count 19→0 with
+    data_persisted=true). 'Memory older than the PREVIOUS marker' cannot be
+    true for a file recreated at this boot."""
+    region = _boot_marker_region(source)
+    assert "_prev_marker_mtime" in region, (
+        "no previous-marker mtime capture ('_prev_marker_mtime') in "
+        "boot-marker block"
+    )
+    # the capture must stat the PREVIOUS marker, before os.replace rewrites it
+    assert "_BOOT_MARKER.stat().st_mtime" in region, (
+        "previous-marker capture must stat _BOOT_MARKER (st_mtime)"
+    )
+    assert "os.replace(" in region, "no 'os.replace(' in boot-marker block"
+    assert region.find("_prev_marker_mtime") < region.find("os.replace("), (
+        "previous-marker mtime must be read BEFORE os.replace overwrites "
+        "the marker"
+    )
+    # the age check must compare memory mtime against the PREVIOUS marker,
+    # never against a freshly (re)written marker
+    assert "_MEMORY_PATH.stat().st_mtime < _prev_marker_mtime" in region, (
+        "age check must compare memory mtime against _prev_marker_mtime "
+        "(previous boot's marker), not a fresh marker stat"
+    )
+    # NAME-marker proximity convention, same as guard 1
+    mem_idx = source.find(MEMORY_PATH_MARKER)
+    prev_idx = source.find("_prev_marker_mtime")
+    assert 0 <= prev_idx - mem_idx <= PROXIMITY, (
+        f"previous-marker capture too far from '{MEMORY_PATH_MARKER}' "
+        f"({prev_idx - mem_idx} chars away)"
+    )
+
+
+# ── 8: marker is excluded from the Docker build context (iter-16) ───────
+
+
+def test_dockerignore_excludes_boot_epoch_marker():
+    """iter-16: data/boot_epoch.json must be excluded from the Docker build
+    context (.dockerignore). While only data/*.jsonl was ignored, the local
+    marker file got baked into the image at /app/data/boot_epoch.json and a
+    wiped volume still 'saw' it — the root cause of the prod false positive
+    (seed_count 19→0 with data_persisted=true, 2026-08-10)."""
+    dockerignore = Path(__file__).resolve().parents[1] / ".dockerignore"
+    assert dockerignore.is_file(), f"repo .dockerignore not found: {dockerignore}"
+    text = dockerignore.read_text(encoding="utf-8")
+    assert "boot_epoch.json" in text, (
+        ".dockerignore must exclude data/boot_epoch.json (image-baked marker "
+        "false positive)"
+    )
+    # the pre-existing exclusions must stay intact (negation survives)
+    assert "data/*.jsonl" in text, ".dockerignore lost the 'data/*.jsonl' line"
+    assert "!data/.gitkeep" in text, (
+        ".dockerignore lost the '!data/.gitkeep' negation"
+    )

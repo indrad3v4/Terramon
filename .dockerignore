@@ -18,6 +18,10 @@ reflex.lock/
 
 # ── Data persistence (local — Railway uses volume mounts) ──
 data/*.jsonl
+# boot marker must NOT be baked into the image: a wiped volume would then
+# still "see" it and report a false data_persisted (seed_count 19→0 with
+# data_persisted=true, prod 2026-08-10)
+data/boot_epoch.json
 !data/.gitkeep
 
 # ── IDE ──
