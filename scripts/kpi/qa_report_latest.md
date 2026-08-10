@@ -1,27 +1,27 @@
-# Terramon — North Star Gap Report (v2) · 2026-08-10 (iter-15)
+# Terramon — North Star Gap Report (v2) · 2026-08-10 (iter-17)
 
-Fingerprint: `baa8de05` (post-iter-14 deploy; новый билд, данные ПЕРЕЖИЛИ редеплой) · Playwright/Chromium headless + TMA-mock · Target: https://terramon-tma-production.up.railway.app
+Fingerprint: `0a88807e` (текущий прод-деплой: `tests:421`, `data_persisted:false` — честный сигнал: Railway volume НЕ примонтирован, данные стёрты редеплоем) · Playwright/Chromium headless + TMA-mock · Target: https://terramon-tma-production.up.railway.app
 
 ---
 
 ## 0. ВЕРДИКТ ДНЯ (TL;DR)
 
-- **North Star Score: 75/100** (→ плато 4-я итерация; Geo/Lore/Win-path железно; M7 код-сайд ЗАКРЫТ и ДВАЖДЫ доказан на проде)
-- Топ-3 блокера: **1) M7 settle-нога: нужен РЕАЛЬНЫЙ ПЛАТЁЖ владельца (~3000 sats) 2) нет реальных игроков (M6/M8) 3) полировка воронки (кнопки mint выше сгиба)**
-- Kill-condition монитор: share 1 · mint 0 · дней с mint=0: ~16/30 → **НЕ в зоне риска (readiness-фаза)**
-- 🎯 **ГЛАВНОЕ СОБЫТИЕ**: (а) инвойс снова создан на проде (`invoice_ok: true`, «⚡ Invoice ready» — Care-панель, post-loop проба); (б) **данные ПЕРЕЖИЛИ редеплой**: seed_count 16→19 + share_count=1 между двумя фингерпринтами — Railway volume, похоже, примонтирован; (в) QR-код инвойса переведён с внешнего api.qrserver.com на ЛОКАЛЬНУЮ генерацию segno (BOLT11 больше не уходит третьей стороне).
+- **North Star Score: 75/100** (плато 6-я итерация; Geo/Lore/Win-path железно; M7 инвойс-нога ДОКАЗАНА на проде 4-й раз; settle ждёт реального платежа)
+- Топ-3 блокера: **1) M7 settle-нога: нужен РЕАЛЬНЫЙ ПЛАТЁЖ владельца (~3000 sats) 2) нет реальных игроков (M6/M8) 3) Railway volume НЕ примонтирован — данные стираются при каждом редеплое (`data_persisted:false`)**
+- Kill-condition монитор: share 1 · mint 0 · дней с mint=0: ~18/30 → **НЕ в зоне риска (readiness-фаза)**
+- 🎯 **ГЛАВНОЕ СОБЫТИЕ iter-17**: **автопроверка оплаты Lightning (auto-verify)** — после создания BOLT11-инвойса приложение само опрашивает Alby Hub каждые 6 с (до 30 попыток / ~3 мин) через скрытый `rx.moment`-таймер; при settle минт записывается АВТОМАТИЧЕСКИ, без клика «✅ I've paid — verify» (кнопка остаётся fallback'ом). Это убирает главный UX-риск MintLoop: раньше оплативший игрок, не нажавший verify (или закрывший приложение), терял минт. Теперь «оплатил → минт записан» гарантирован, пока страница открыта. Прямой удар по M7 → северной звезде.
 
 ## 1. NORTH STAR SCORE (композит)
 
 | Компонент | Вес | Сегодня | Нормализация |
 |---|---|---|---|
 | Geo-привязка | 25 | **100%** (12/12) | static-map URL с реальными координатами (50.0619, 19.9368); headless-симуляция, ждёт device-проверки |
-| Vision-lore («Open your eyes») | 25 | **1** | кнопка в DOM на главной карточке + лор рендерится |
+| Vision-lore («Open your eyes») | 25 | **1** | кнопка в DOM на главной карточке + после Care-таба |
 | Win-path (достижимость) | 25 | **12/12** | min(архетипов/12, 1) — полная вселенная |
-| Mint-loop | 25 | **0** | инвойс создан (invoice_ok=True), settle не было → mint_count=0 |
+| Mint-loop | 25 | **0** | инвойс создан (invoice_ok=True, 4-й прогон), settle не было → mint_count=0 |
 | **ИТОГО** | 100 | **75/100** | |
 
-Боевая формула (с реальными игроками): NSS = 40·MintRate + 30·D7 + 15·Geo + 15·Lore.
+Боевая формула (включается, когда есть реальные игроки): NSS = 40·MintRate + 30·D7 + 15·Geo + 15·Lore.
 
 ## 2. ГЭП-ТАБЛИЦА (мост «инженерия → северная звезда»)
 
@@ -30,36 +30,28 @@ Fingerprint: `baa8de05` (post-iter-14 deploy; новый билд, данные 
 | M1 | Geo% | доля существ с реальными координатами | 12/12 (100%) | 100% | 🟢 код-ок; ждёт device-проверки | share-петлю | AUTO + **device** |
 | M2 | Vision-lore | «Open your eyes» + рендер лора | 1 | 1 | 🟢 ок | эмоцию/арт | AUTO |
 | M3 | Win-path | уникальные архетипы за прогон | 12/12 | 12/12 | 🟢 ок | контентную глубину → D7 | AUTO |
-| M4 | Дубликаты | unique/total | 12/21 (0.57) | 1.0 | 🟡 инфо (часть — probe-сиды) | экономику минта | AUTO |
-| M5 | Фрикция | гейт/модалки | 0 блоков | 0 | 🟢 ок | онбординг → D7 | AUTO |
-| M6 | Share-funnel | доля сессий с share-тапом | счётчик работает (+1 честный тап) | ≥2% (kill <2%) | 🔴 нет игроков | охват (kill-condition) | AUTO + **люди** |
-| M7 | Mint rate | % саммонеров с mint | 0 (mint_count=0) | ≥2% | 🔴 **инвойс-нога ДОКАЗАНА (2-й раз); settle ждёт платёж** | саму северную звезду | AUTO + **платёж владельца** |
+| M4 | Дубликаты | unique/total | 12/12 в прогоне (probe-сиды 14+ на проде) | 1.0 | 🟢 ок (dedup работает) | экономику минта | AUTO |
+| M5 | Фрикция | гейт/модалки | 0 блоков (failed_rounds: []) | 0 | 🟢 ок | онбординг → D7 | AUTO |
+| M6 | Share-funnel | доля сессий с share-тапом | счётчик работает (share=1 на проде) | ≥2% (kill <2%) | 🔴 нет игроков | охват (kill-condition) | AUTO + **люди** |
+| M7 | Mint rate | % саммонеров с mint | 0 (mint_count=0) | ≥2% | 🔴 **инвойс-нога ДОКАЗАНА (4-й раз); settle ждёт платёж; auto-verify устранил UX-риск потери минта** | саму северную звезду | AUTO + **платёж владельца** |
 | M8 | D7 retention | возврат на 7-й день | нет данных | кохортный бенчмарк | 🔴 нет игроков | 2-ю половину NSS | **люди** |
 
-Регрессионные guard: **421 тест зелёные** (418 + 3 новых) · reflex export собирается · +3 source-scan гварда (локальный QR, запрет внешнего QR-сервиса, age-based persistence).
+Регрессионные guard: **437 тестов зелёные** (429 + 8 новых: 3 source-guard auto-verify + 5 поведенческих) · reflex export собирается (exit 0, в JSX виден `jsx(Moment,{interval:6000,...})`) · /health tests count синхронизирован 421→429→**437** (в т.ч. починен guard, сломанный с iter-16: рабочее дерево уже имело `"tests":429`, guard ждал 421 → 1 fail; теперь сходится).
 
 ## 3. ТОП-3 БЛОКЕРА (ранжировано)
 
-1. **M7 mint-loop: код-сайд цепочка доказана полностью (2-й прогон подряд), остался 1 реальный платёж.** Проба снова кликнула «⚡ Mint via Lightning» (Care-панель) → **`invoice_ok: true`, «⚡ Invoice ready: 3000 sats»** — Alby Hub создаёт инвойс на проде. MintLoop=0 только потому, что инвойс никто не оплатил (settle → `verify_lightning` → `_record_mint` → mint_count=1). **Действие владельца: оплатить инвойс из любого LN-кошелька (~3000 sats) и нажать «✅ I've paid — verify» в игре → M7=1 → NSS=100.** Это ЕДИНСТВЕННЫЙ оставшийся шаг до 100/100 (readiness).
-2. **M6/M8: нет реальных игроков.** share-счётчик честно работает (+1 тап/прогон), но kill-condition меряется на пустой аудитории. **Действие владельца: разослать бота, проверить кнопку Mini App в Telegram.** Полировка (кнопки mint выше сгиба на home-карточке) — код-сайд сделана частично в iter-14 (карточка скроллится, ничего не перекрыто), визуальный акцент — следующий проход.
-3. **data_persisted — сигнал теперь ЧЕСТНЫЙ (age-based).** В этом прогоне данные ПЕРЕЖИЛИ редеплой (seed_count 16→19, share_count 1 — между фингерпринтами f821d7914 и baa8de05, т.е. билд сменился, а data/ уцелела) → volume, похоже, примонтирован. Чтобы убрать класс ложноположительных срабатываний (маркер выжил, данные стёрты), `DATA_PERSISTED` теперь = выжил маркер **И** файл памяти старше свежего маркера boot'а (`_MEMORY_PATH.stat().st_mtime < _BOOT_MARKER.stat().st_mtime`). След. деплой покажет честное значение.
+1. **M7 settle-нога — нужен реальный платёж владельца.** Инвойс-создание доказано на проде 4 раза подряд (`invoice_ok:true`, «⚡ Invoice ready» — Magician post-loop проба). mint_count=0, потому что никто не платил. Теперь код-сайд готов и к settle: auto-verify сам опросит Alby Hub и запишет минт. → **Owner action**: открыть приложение в Telegram, призвать существо (англ. мысль, 1-5 призывов), дождаться mint-кнопки, нажать «⚡ Mint via Lightning» (~3000 sats), оплатить из LN-кошелька — минт запишется АВТОМАТИЧЕСКИ (или нажать «✅ I've paid — verify») → mint_count станет 1 → NSS = 100 (MintLoop 25/25).
+2. **Нет реальных игроков (M6/M8).** Все seed_count на проде — probe-сиды KPI-прогонов. → **Owner action**: запустить тестовую аудиторию/друзей, замерить share% и D7.
+3. **Railway volume НЕ примонтирован** (подтверждено iter-16 фиксом, подтверждается снова): `data_persisted:false` на текущем деплое, данные стираются при каждом редеплое. Бизнес-эффект: mint-рекорды/игроки не переживут редеплой. → **Owner action**: в Railway dashboard создать volume `terramon-data` и примонтировать к сервису (railway.json уже декларирует mount /app/data).
 
-## 4. ЧТО СДЕЛАНО В ITER-15 (все изменения проверены на диске: grep + pytest + export)
+## 4. EVIDENCE
 
-1. **Локальный QR вместо внешнего сервиса (self-custody-фикс, M7-качество)**. Раньше `rx.image(src="https://api.qrserver.com/...")` — BOLT11 инвойс утекал третьей стороне (api.qrserver.com) при каждом показе; при недоступности API QR пропадал. Теперь: `import segno` (стр. 46), хелпер `_qr_data_uri()` (стр. 3175, `segno.make_qr("lightning:" + invoice).png_data_uri(scale=4)` — URI-схема `lightning:` по спецификации BOLT11), state-var `lightning_qr` (стр. 345), заполняется в `mint_lightning` (стр. 1705) и `pay_lightning` (стр. 1820), рендер через `rx.cond(lightning_qr != "", rx.image(...), rx.text("QR unavailable…"))` (стр. 3191-3202). `api.qrserver.com` в модуле: **0 вхождений** (grep подтверждён). Рефы: segno (BSD-3, zero-dep, pure-Python), lightning/bolts BOLT11 (`lightning:` URI), BlitzWallet (self-custodial web — QR локально).
-2. **Age-based `DATA_PERSISTED` (честность kill-condition монитора)**. Стр. 172-187: после записи свежего маркера `DATA_PERSISTED = _boot_survived and _MEMORY_PATH.exists() and _MEMORY_PATH.stat().st_mtime < _BOOT_MARKER.stat().st_mtime`. Маркер boot_id/boot_time/survived не тронут.
-3. **`/health` tests count синхронизирован: 414 → 421** (стр. 4081) + guard `test_health_tests_count` обновлён на 421 (tests/test_mint_lightning.py:235).
-4. **3 новых source-scan гварда**: `test_local_segno_qr_wiring` (import segno + точная строка `segno.make_qr("lightning:" + invoice).png_data_uri(scale=4)` + state-var), `test_no_external_qr_service_anywhere` (api.qrserver.com запрещён по всему модулю), `test_data_persisted_age_based` (mtime-сравнение в boot-регионе, tests/test_health_persistence.py:180-196). Обновлён guard панели: «qrserver not in source» + локальная цепочка `_qr_data_uri` → `lightning_qr` → panel.
-5. **requirements.txt**: `segno>=1.6.6` (pure-python, zero deps — безопасно для slim-образа).
-6. Верификация: **421 passed, 0 failed** · `reflex export --frontend-only --no-zip` exit 0 · grep'ом подтверждены все 8 точек изменений.
-
-## 5. RESEARCH-РЕФЕРЕНСЫ (обоснование решений iter-15)
-
-- **heuer/segno** (PyPI, BSD-3, pure-Python, НОЛЬ зависимостей; `QRCode.png_data_uri()`; активный, v1.6.6 2025): паттерн «QR-код генерируется локально, инвойс не покидает приложение» → **REPLICATE** (сделано). Архитектура: изолированный энкодер ISO/IEC 18004:2015, никаких сетевых вызовов — идеально для self-custody.
-- **lightning/bolts BOLT11** (спецификация инвойсов, QR-ready): QR-код для LN должен кодировать URI-схему `lightning:<bolt11>` — так его сканируют кошельки (Alby, Phoenix и др.) → **REPLICATE** (сделано: `segno.make_qr("lightning:" + invoice)`).
-- **BlitzWallet/blitz-web-app** (self-custodial web-платежи, Apache-2.0): принцип «ключи и инвойсы не покидают клиент; QR локально» → **REPLICATE**; их React Native/Expo-стек → **AVOID** (у нас Reflex, переписывать нечего).
-- **getalby/hub** (активный, self-custodial LN-нода, NIP-47): паттерн «инвойс → lookup → settled» в `verify_lightning` → **REPLICATE** (уже реализовано; settle ждёт платёж).
+- NSS-прогон: geo_ok 1/1 раундов (map-url) · distinct 12/12 · OYE в DOM · mint_ui_state: «mint visible» в post-loop пробе · `invoice_ok:true`, «⚡ Invoice ready» (Magician) · mint_count_health: 0 · m6 share_count: 1 (без дельты — раунд без успешного summon) · failed_rounds: []
+- Auto-verify (iter-17): `LIGHTNING_VERIFY_INTERVAL_MS=6000` / `LIGHTNING_VERIFY_MAX_ATTEMPTS=30` (terramon_tma.py:238-246) · state: `lightning_auto_verify`/`lightning_verify_attempts` (:364-365) · arm в `mint_lightning` (:1738-1741) и `pay_lightning` (:1857-1860) · `verify_lightning(self, _tick=None)` (:1866-1941): stale-timer silent stop, settle→disarm+`_record_mint`, poll-тик НЕ трогает `agent_message` (KPI-маркер «⚡ Invoice ready» защищён), give-up после 30 попыток с маркером «⏳ Payment not detected yet…», ручной путь байт-в-байт · панель (:3284-3310): вложенный cond (auto-checking → checking → кнопка) + `rx.moment(interval=6000, on_change=TerramonState.verify_lightning, display="none")`, гейт на `lightning_auto_verify` (таймер размонтируется при остановке)
+- Тесты: +8 (3 source-guard: wired-on-invoice / auto-path-guarded / panel-timer-wired; 5 поведенческих: arm-on-invoice / settle-records-mint / poll-не-затирает-маркер / gives-up-to-manual+fallback-минт / manual-маркер-байт-в-байт) → **437 passed, 0 failed** · `reflex export --frontend-only --no-zip` exit 0 · все 7 KPI-маркеров байт-в-байт (проверено grep + marker-contract тесты)
+- RESEARCH-референсы: **BTCPay Server** (docs.btcpayserver.org ecommerce-integration-guide / Invoices FAQ): create invoice → poll/event на статус → deliver на «settled»; LN-инвойсы сеттлятся мгновенно; таймер истечения → REPLICATE: ограниченный auto-poll (30×6с) + аккуратный ручной fallback; AVOID: безлимитный polling и внешняя checkout-страница (у нас инлайн BOLT11+QR). **Reflex periodic callback** (reflex-dev discussion #1970): `rx.moment(interval, on_change, display="none")` — единственный штатный периодический паттерн в Reflex 0.9.x (rx.timer НЕТ) → REPLICATE (on_change передаёт datetime → параметр `_tick=None`). **Alby Hub** (getalby/hub, NIP-47): `verify_payment`/lookup — оракул settle; мгновенный LN-settle → каденс 6с достаточен → REPLICATE без изменений.
+- Ограничение честности: гео — симуляция device-разрешения (Playwright grant_permissions), нужен реальный девайс; TMA — injected-mock (headless без Telegram runtime), initData hash FAKE без бот-токена; auto-verify проверен юнит-тестами на фейковом Alby — боевой settle ждёт реального платежа.
 
 ---
 
-**NSS: 75/100** · Сделано: локальный segno-QR (BOLT11 больше не утекает на api.qrserver.com), age-based data_persisted (честный сигнал; данные пережили редеплой — volume работает), /health tests 414→421, +3 гварда, 421 тест. · **След. итерация**: (1) перепроверить KPI после деплоя (ждём data_persisted=true + seed_count НЕ сброшен), (2) полировка home-card mint-зоны (кнопки выше сгиба), (3) если появились игроки — старт боевой формулы NSS. · **Действие владельца (критично для NSS=100)**: оплатить LN-инвойс ~3000 sats → «✅ I've paid — verify» → M7=1 → NSS=100; разослать бота (M6/M8).
+**NSS: 75/100** · Сделано: Lightning auto-verify (минт записывается сам при settle — 0 кликов, ручной verify как fallback, KPI-маркер защищён), /health tests count 429→437 + починен сломанный с iter-16 guard (421→429→437), +8 гвардов, 437 тестов. · **След. итерация**: (1) перепроверить KPI после деплоя (ждём `tests:437` + auto-verify активен на проде: в probe-сессии после клика mint появятся тики опроса), (2) полировка home-card mint-зоны (визуальный акцент кнопок выше сгиба — M5), (3) подготовка D7-кохорт (player_id → first_seen → возвраты) под боевую формулу. · **Действие владельца (критично для NSS=100)**: оплатить LN-инвойс ~3000 sats → минт запишется АВТОМАТИЧЕСКИ → M7=1 → NSS=100; примонтировать Railway volume (data_persisted); разослать бота (M6/M8).

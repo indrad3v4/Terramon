@@ -232,9 +232,81 @@ def test_gate_keeps_lightning_wiring(source):
 
 def test_health_tests_count(source):
     """(e) /health reports the synced pytest count."""
-    assert '"tests": 421' in source, (
-        "health endpoint pytest count not synced to 421"
+    assert '"tests": 437' in source, (
+        "health endpoint pytest count not synced to 437"
     )
+
+
+def test_lightning_auto_verify_wired_on_invoice(source):
+    """Auto-verify is ARMED on invoice creation: both mint_lightning and
+    pay_lightning set lightning_auto_verify = True and reset the attempt
+    counter on their SUCCESS path (after the invoice is created), so the
+    hidden rx.moment poller starts ticking right after the BOLT11 is shown.
+    """
+    for name in ("mint_lightning", "pay_lightning"):
+        body = _method_body(source, name)
+        assert "self.lightning_auto_verify = True" in body, (
+            f"{name} does not arm lightning_auto_verify on invoice creation"
+        )
+        assert "self.lightning_verify_attempts = 0" in body, (
+            f"{name} does not reset lightning_verify_attempts on invoice creation"
+        )
+        # Armed AFTER the invoice exists — never on the failure path.
+        assert body.index("self.lightning_auto_verify = True") > body.index(
+            "self.lightning_ref = req.verification_ref"
+        ), f"{name} arms auto-verify before the invoice is actually created"
+        assert "self.lightning_auto_verify = True" not in body.split(
+            "except Exception"
+        )[-1], f"{name} must not arm auto-verify on the exception path"
+
+
+def test_verify_lightning_auto_path_guarded(source):
+    """verify_lightning accepts the rx.moment tick arg, counts bounded poll
+    attempts, and gives up gracefully with the exact manual-fallback marker
+    (byte-identical wording — the KPI probe and the button both key on it).
+    """
+    body = _method_body(source, "verify_lightning")
+    assert "def verify_lightning(self, _tick=None):" in body, (
+        "verify_lightning must accept the rx.moment tick arg (_tick=None)"
+    )
+    assert "LIGHTNING_VERIFY_MAX_ATTEMPTS" in body, (
+        "verify_lightning does not reference LIGHTNING_VERIFY_MAX_ATTEMPTS"
+    )
+    assert "self.lightning_verify_attempts += 1" in body, (
+        "verify_lightning does not count poll attempts"
+    )
+    assert (
+        "⏳ Payment not detected yet — press «✅ I've paid — verify» once you've paid."
+        in body
+    ), "verify_lightning missing the exact give-up marker"
+
+
+def test_panel_auto_verify_timer_wired(source):
+    """The shared invoice panel carries the hidden rx.moment periodic poller,
+    gated on lightning_auto_verify so it unmounts when auto-verify stops, and
+    shows the auto-checking status line instead of the manual button while
+    armed (the button stays in source as the fallback)."""
+    panel = _top_level_func_lines(source, "_lightning_invoice_panel")
+    assert "rx.moment(" in panel, (
+        "invoice panel does not render the rx.moment periodic poller"
+    )
+    assert "interval=6000" in panel, (
+        "auto-verify poller must tick every 6000 ms"
+    )
+    assert "on_change=TerramonState.verify_lightning" in panel, (
+        "rx.moment on_change is not wired to verify_lightning"
+    )
+    assert 'display="none"' in panel, (
+        "auto-verify poller must be hidden"
+    )
+    assert panel.count("TerramonState.lightning_auto_verify") >= 2, (
+        "auto-verify status line + timer gate must both key on lightning_auto_verify"
+    )
+    assert "⏳ Auto-checking payment…" in panel, (
+        "panel missing the auto-checking status line"
+    )
+    # Manual fallback button label stays in source.
+    assert "✅ I've paid — verify" in panel
 
 
 def _state_class_region(source: str) -> str:

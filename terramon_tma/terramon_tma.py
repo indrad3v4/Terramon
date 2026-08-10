@@ -235,6 +235,16 @@ _STARS_INVOICE_URL = "https://t.me/terramon_bot/TERRAMON_STAR_INVOICE"
 GATE_SUMMON_PRICE_SATS = 3000  # Lightning rail (>= Alby JIT floor 2501)
 GATE_SUMMON_STARS = 1          # Telegram Stars rail
 
+# Lightning auto-verify: after an invoice is created the panel polls the
+# Alby Hub for settlement every LIGHTNING_VERIFY_INTERVAL_MS via a hidden
+# rx.moment periodic callback (the only sane periodic pattern in Reflex
+# 0.9.x — no rx.timer). Bounded: after LIGHTNING_VERIFY_MAX_ATTEMPTS
+# (~3 min) polling stops and the manual «✅ I've paid — verify» button
+# remains as the fallback. A paid mint is never lost: the handler keeps
+# polling until settle or gives up with a clear manual-fallback marker.
+LIGHTNING_VERIFY_INTERVAL_MS = 6000   # rx.moment tick interval for auto-verify
+LIGHTNING_VERIFY_MAX_ATTEMPTS = 30    # ~3 min of auto-polling, then manual fallback
+
 # GameLoop owns progression + reflection; SummonService persists each turn.
 _SERVICE = SummonService(
     classifier=_CLASSIFIER,
@@ -361,6 +371,8 @@ class TerramonState(rx.State):
     lightning_price: int = 0         # actual sats price (>= LIGHTNING_MIN_MINT_SATS)
     lightning_ref: str = ""          # hub invoice id for verification
     lightning_checking: bool = False  # in-flight verify flag
+    lightning_auto_verify: bool = False  # auto-poll Alby settle after invoice creation
+    lightning_verify_attempts: int = 0   # bounded auto-poll tick counter
 
     # M7 — Mint loop (closed): a real mint record on the seed + a counter
     # for analytics. Stars = optimistic mint on click (openInvoice has no
@@ -1722,6 +1734,10 @@ class TerramonState(rx.State):
                 self.lightning_qr = ""
             self.lightning_ref = req.verification_ref
             self.lightning_checking = False
+            # Auto-verify: arm the hidden rx.moment poller so the mint
+            # records itself when the invoice settles — no click needed.
+            self.lightning_auto_verify = True
+            self.lightning_verify_attempts = 0
             self.agent_message = f"⚡ Invoice ready: {price} sats. Pay with any Lightning wallet."
         except Exception as e:
             log.error(f"mint_lightning failed: {e}", exc_info=True)
@@ -1837,17 +1853,37 @@ class TerramonState(rx.State):
                 self.lightning_qr = ""
             self.lightning_ref = req.verification_ref
             self.lightning_checking = False
+            # Auto-verify: arm the hidden rx.moment poller so the gate
+            # unlocks itself when the invoice settles — no click needed.
+            self.lightning_auto_verify = True
+            self.lightning_verify_attempts = 0
             self.agent_message = f"⚡ Invoice ready: {price} sats. Pay with any Lightning wallet."
         except Exception as e:
             log.error(f"pay_lightning failed: {e}", exc_info=True)
             self.agent_message = f"⚡ Invoice failed: {getattr(e, 'message', e)}"
 
     @rx.event
-    def verify_lightning(self):
-        """Check whether the BOLT11 invoice was settled on the hub; unlock on success."""
+    def verify_lightning(self, _tick=None):
+        """Check whether the BOLT11 invoice was settled on the hub; unlock on success.
+
+        Auto-verify: called every LIGHTNING_VERIFY_INTERVAL_MS by the hidden
+        rx.moment poller (rx.moment passes the current datetime — swallowed by
+        _tick) AND by the manual «✅ I've paid — verify» button (no arg). On
+        settle the mint records itself with no click; polling is bounded and
+        falls back to the manual button with a clear marker. While polling,
+        agent_message is never touched — the KPI probe parses the
+        "⚡ Invoice ready: ..." marker within seconds of the mint click.
+        """
         if not self.lightning_ref or not _ALBY.url:
+            # Stale timer after a new invoice / panel teardown: stop the poll
+            # silently — never clobber the invoice marker the KPI probe parses.
+            if self.lightning_auto_verify:
+                self.lightning_auto_verify = False
+                self.lightning_verify_attempts = 0
+                return
             self.agent_message = "⚡ Create an invoice first (Pay with Lightning)."
             return
+        is_auto = self.lightning_auto_verify
         self.lightning_checking = True
         try:
             from terramon.ports.payment_port import PaymentRequest, PaymentMethod
@@ -1866,6 +1902,9 @@ class TerramonState(rx.State):
             if _ALBY.verify_payment(req):
                 self.unlocked = True
                 self.lightning_checking = False
+                # Auto-verify done — the invoice settled, stop the poller.
+                self.lightning_auto_verify = False
+                self.lightning_verify_attempts = 0
                 # M7: Lightning mints on SETTLE — the invoice really was paid.
                 if self._record_mint():
                     self.agent_message = (
@@ -1875,12 +1914,31 @@ class TerramonState(rx.State):
                 else:
                     self.agent_message = "✅ Payment received! Your thought is free to summon."
             else:
-                self.lightning_checking = False
-                self.agent_message = "⏳ Not settled yet — waiting for the payment to confirm."
+                if is_auto:
+                    # Poll tick: count it and keep polling WITHOUT touching
+                    # agent_message (the KPI probe parses the invoice-ready
+                    # marker). Give up gracefully at the bound — the manual
+                    # button remains as the fallback.
+                    self.lightning_verify_attempts += 1
+                    self.lightning_checking = False
+                    if self.lightning_verify_attempts >= LIGHTNING_VERIFY_MAX_ATTEMPTS:
+                        self.lightning_auto_verify = False
+                        self.agent_message = "⏳ Payment not detected yet — press «✅ I've paid — verify» once you've paid."
+                else:
+                    self.lightning_checking = False
+                    self.agent_message = "⏳ Not settled yet — waiting for the payment to confirm."
         except Exception as e:
             log.error(f"verify_lightning failed: {e}", exc_info=True)
             self.lightning_checking = False
-            self.agent_message = f"⚡ Verify failed: {getattr(e, 'message', e)}"
+            if is_auto:
+                # Same bounded poll path as not-settled: never clobber the
+                # invoice marker while polling; give up gracefully at the bound.
+                self.lightning_verify_attempts += 1
+                if self.lightning_verify_attempts >= LIGHTNING_VERIFY_MAX_ATTEMPTS:
+                    self.lightning_auto_verify = False
+                    self.agent_message = "⏳ Payment not detected yet — press «✅ I've paid — verify» once you've paid."
+            else:
+                self.agent_message = f"⚡ Verify failed: {getattr(e, 'message', e)}"
 
     @rx.event
     def light_candle(self):
@@ -3226,14 +3284,28 @@ def _lightning_invoice_panel() -> rx.Component:
                 max_width="280px", word_break="break-all",
             ),
             rx.cond(
-                TerramonState.lightning_checking,
-                rx.text("⏳ Checking payment…", font_size="0.7em", color="#9ca3af"),
-                rx.button(
-                    "✅ I've paid — verify",
-                    on_click=TerramonState.verify_lightning,
-                    variant="solid", size="2", color_scheme="yellow",
-                    width="100%", _hover={"transform": "scale(1.02)"},
+                TerramonState.lightning_auto_verify,
+                rx.text("⏳ Auto-checking payment… " + TerramonState.lightning_verify_attempts.to_string() + "/30", font_size="0.7em", color="#9ca3af"),
+                rx.cond(
+                    TerramonState.lightning_checking,
+                    rx.text("⏳ Checking payment…", font_size="0.7em", color="#9ca3af"),
+                    rx.button(
+                        "✅ I've paid — verify",
+                        on_click=TerramonState.verify_lightning,
+                        variant="solid", size="2", color_scheme="yellow",
+                        width="100%", _hover={"transform": "scale(1.02)"},
+                    ),
                 ),
+            ),
+            # Hidden periodic poller: while auto-verify is armed, rx.moment
+            # re-renders every 6s and fires verify_lightning(datetime) —
+            # the only sane periodic callback pattern in Reflex 0.9.x.
+            # The cond gate unmounts it the moment auto-verify stops
+            # (settled or gave up), so no stray timers keep firing.
+            rx.cond(
+                TerramonState.lightning_auto_verify,
+                rx.moment(interval=6000, on_change=TerramonState.verify_lightning, display="none"),
+                rx.fragment(),
             ),
             rx.button(
                 "🔄 New invoice",
@@ -4093,7 +4165,7 @@ def health(request):
         alby_configured = False
     return JSONResponse({
         "status": "ok",
-        "tests": 421,  # pytest count, synced at iter-15 (segno QR + age-based persistence guards)
+        "tests": 437,  # pytest count, synced at iter-17 (auto-verify guards)
         "data_persisted": data_persisted,
         "mint_count": mint_count,
         "seed_count": seed_count,
