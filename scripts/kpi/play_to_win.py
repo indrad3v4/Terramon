@@ -135,8 +135,36 @@ def capture_location(page):
         print("   [geo] no '📍' line appeared within 3s after '⟳' click")
     return geo_line
 
+def place_name_from_body(body):
+    """M1 geo evidence: the human place name on the creature card's 📍 line.
+
+    The app renders the geo line as the HUMAN place name ('Kraków,
+    Polska' style — TerramonState.place from GeoContext), not raw
+    coords, so the coords regex in collect_m2_evidence returns None
+    for it (see the note in geo_ok_from_map_url). Return the text
+    after the 📍 emoji on the first matching body line (falling back
+    to the next non-empty line when the emoji and the name render as
+    separate rx.text nodes in the hstack), else a known place-name
+    pattern ('City, Country'), else None.
+    """
+    if not body:
+        return None
+    lines = body.splitlines()
+    for i, line in enumerate(lines):
+        if "📍" in line:
+            rest = line.split("📍", 1)[1].strip()
+            if not rest and i + 1 < len(lines):
+                rest = lines[i + 1].strip()
+            if rest:
+                return rest
+    m = re.search(
+        r"\b[A-ZĄĆĘŁŃÓŚŹŻ][a-ząćęłńóśźż]+(?:[- ][A-ZĄĆĘŁŃÓŚŹŻ]?[a-ząćęłńóśźż]+)*,\s+[A-ZĄĆĘŁŃÓŚŹŻ][a-ząćęłńóśźż]+",
+        body,
+    )
+    return m.group(0) if m else None
+
 def collect_m2_evidence(page):
-    """M2: vision-lore evidence after a successful summon -> {geo_ok, oye, map_img, place}."""
+    """M2: vision-lore evidence after a successful summon -> {geo_ok, oye, map_img, place, place_name}."""
     body = page.locator("body").inner_text()
     coords = re.findall(r"-?\d+\.\d+\s*,\s*-?\d+\.\d+", body)
     place = coords[0] if coords else None
@@ -148,7 +176,8 @@ def collect_m2_evidence(page):
         if "static-map" in src or "staticmap" in src or "yandex" in src:
             map_img = True
             break
-    return {"geo_ok": geo_ok, "oye": oye, "map_img": map_img, "place": place}, body
+    return {"geo_ok": geo_ok, "oye": oye, "map_img": map_img, "place": place,
+            "place_name": place_name_from_body(body)}, body
 
 def geo_ok_from_map_url(srcs):
     """M1 geo evidence from the static-map <img> URL (authoritative): True if any
@@ -360,6 +389,7 @@ def run_m7_mint_probe(browser, thought, candidate_label="probe"):
     m7_probe = {"probe_thought": thought, "probe_seed_created": False,
                 "mint_button_presence": False, "mint_ui_state": None,
                 "mint_clicked": False, "invoice_ok": None, "invoice_msg": None,
+                "auto_verify_seen": False, "auto_verify_marker": None,
                 "alby_configured": None}
     probe_ctx = None
     try:
@@ -447,6 +477,15 @@ def run_m7_mint_probe(browser, thought, candidate_label="probe"):
                         m7_probe["mint_clicked"] = True
                         print(f"   [m7-probe:{candidate_label}] clicked '⚡ Mint via Lightning' once (match #{i} — visible and not covered; invoice creation only, no payment attempted)")
                         probe_page.wait_for_timeout(2500)
+                        # Auto-verify poller window: iter-17 prod arms a hidden
+                        # rx.moment poller (LIGHTNING_VERIFY_INTERVAL_MS = 6000)
+                        # that fires verify_lightning() every 6s while
+                        # lightning_auto_verify is True; the invoice panel shows
+                        # '⏳ Auto-checking payment… N/30'. Wait ~4.5s more
+                        # (~7s total after the click, > one 6s tick) so a live
+                        # deploy has ticked at least once (N >= 1) before the
+                        # marker read below.
+                        probe_page.wait_for_timeout(4500)
                         break
                 else:
                     print(f"   [m7-probe:{candidate_label}] '⚡ Mint via Lightning' present but no visible, uncovered button found (not fatal)")
@@ -462,10 +501,33 @@ def run_m7_mint_probe(browser, thought, candidate_label="probe"):
         # invoice-creation click above (at most once per run — the
         # post-loop caller stops at the first candidate with a live MINT
         # area).
+        probe_body_after_invoice = probe_page.locator("body").inner_text()
         m7_probe["invoice_ok"], m7_probe["invoice_msg"] = parse_invoice_status(
-            probe_page.locator("body").inner_text()
+            probe_body_after_invoice
         )
         m7_probe["alby_configured"] = fetch_alby_configured()
+        # Auto-verify poller evidence (iter-17 prod deploy): while
+        # lightning_auto_verify is True the invoice panel renders the marker
+        # '⏳ Auto-checking payment… N/30' (N = lightning_verify_attempts,
+        # 30 = LIGHTNING_VERIFY_MAX_ATTEMPTS) and the hidden rx.moment
+        # poller ticks every 6s. The waits above (2500ms + 4500ms ≈ 7s after
+        # the click) span at least one tick, so a live iter-17 deploy shows
+        # N >= 1. Absence is recorded HONESTLY as auto_verify_seen=False
+        # (older deploy without auto-verify, or the poll already gave up) —
+        # never as a pass. Never fatal.
+        try:
+            av_match = re.search(
+                r"^.*⏳ Auto-checking payment…\s*\d+/30.*$",
+                probe_body_after_invoice,
+                re.M,
+            )
+            m7_probe["auto_verify_seen"] = bool(av_match)
+            m7_probe["auto_verify_marker"] = av_match.group(0).strip() if av_match else None
+        except Exception as e:
+            m7_probe["auto_verify_seen"] = False
+            m7_probe["auto_verify_marker"] = None
+            print(f"   [m7-probe:{candidate_label}] auto-verify marker parse failed (not fatal): {str(e)[:120]}")
+        print(f"   [m7-probe:{candidate_label}] auto-verify poller: seen={m7_probe['auto_verify_seen']}, marker={m7_probe['auto_verify_marker']}")
         print(f"[m7-probe:{candidate_label}] {json.dumps(m7_probe, ensure_ascii=False)}")
     except Exception as e:
         print(f"[m7-probe:{candidate_label}] ERROR (not fatal): {str(e)[:200]}")
@@ -635,10 +697,11 @@ with sync_playwright() as p:
                     "map_imgs": map_imgs_after_care,
                     "geo_ok": geo_ok_after_care,
                     "place": place_after_care,
+                    "place_name_after_care": place_name_from_body(care_body),
                     "geo_ok_body": geo_ok_body,
                     "geo_ok_map_url": geo_ok_map_url,
                 }
-                print(f"   -> main-card (Care tab) OYE: {oye_after_care}, map: {map_imgs_after_care}, geo_ok: {geo_ok_after_care} (body: {geo_ok_body}, map-url: {geo_ok_map_url}, place: {place_after_care})")
+                print(f"   -> main-card (Care tab) OYE: {oye_after_care}, map: {map_imgs_after_care}, geo_ok: {geo_ok_after_care} (body: {geo_ok_body}, map-url: {geo_ok_map_url}, place: {place_after_care}, place_name: {rlog['m2_after_care']['place_name_after_care']})")
                 # NSS M1/M2 evidence from the re-check (static map visible by now)
                 if geo_ok_after_care:
                     geo_ok_rounds.append(round_no)
@@ -794,6 +857,7 @@ with sync_playwright() as p:
             "probe_thought": None, "probe_seed_created": False,
             "mint_button_presence": False, "mint_ui_state": None,
             "mint_clicked": False, "invoice_ok": None, "invoice_msg": None,
+            "auto_verify_seen": False, "auto_verify_marker": None,
             "alby_configured": None}
         print("[m7-probe] NO candidate rendered the MINT area (can_mint gate not passed for any of the 3 English thoughts; likely a fresh belief file right after redeploy) — invoice_ok stays None, recorded honestly")
     if m7_probe["invoice_ok"] is not None:
@@ -815,6 +879,9 @@ with sync_playwright() as p:
     print(f"m7_round1_probe (round 1): {json.dumps(m7_round1_probe, ensure_ascii=False) if m7_round1_probe else 'not probed'}  (dedup card: _present_existing_creature sets price_sats but NEVER can_mint, so the mint button is hidden by design there — 'locked · train more')")
     print(f"m7_probe_postloop: {json.dumps(m7_probe, ensure_ascii=False)}  (post-loop run-unique ENGLISH thought '{m7_probe.get('probe_thought')}' -> REAL new summon bypassing dedup -> fresh-summon MINT area + '⚡ Mint via Lightning' invoice-creation click; invoice_ok + alby_configured tell whether Alby Hub is configured on prod; probe_seed_created=True means up to 3 real seeds created on prod by this run, one per candidate attempt — honest note; the classifier is English-keyword TF-IDF (tokenizer regex [a-z']+ drops Cyrillic), so Russian thoughts never reach can_mint)")
     print(f"m7_probe_attempts: {json.dumps(m7_probe_attempts, ensure_ascii=False)}  (candidate attempts in order Lover -> Magician -> Caregiver, stopped at the first with a live MINT area; each attempt used its own run-unique timestamped English thought in a fresh context)")
+    print(f"auto_verify_seen: {m7_probe.get('auto_verify_seen')}  (post-loop mint probe, ~7s after the single '⚡ Mint via Lightning' invoice-creation click: '⏳ Auto-checking payment… N/30' visible in the invoice panel = the hidden rx.moment poller (6s tick, LIGHTNING_VERIFY_INTERVAL_MS) is ARMED on the live prod deploy; False = iter-17 auto-verify absent on this deploy or the poll already gave up — recorded honestly, absence is never a pass)")
+    print(f"auto_verify_marker: {m7_probe.get('auto_verify_marker')}  (the matched invoice-panel body line, e.g. '⏳ Auto-checking payment… 1/30', or None)")
+    print(f"place_name_rounds: {json.dumps([r.get('m2_after_care', {}).get('place_name_after_care') for r in round_log], ensure_ascii=False)}  (M1 geo evidence: human place name from the creature card's 📍 line — the UI shows 'Kraków, Polska' style names, not raw coords; None when the card shows no place name)")
     m6_share_probe = next((r.get("m6_share_probe") for r in round_log if r.get("m6_share_probe") is not None), None)
     print(f"m6_share_probe (round 1): {json.dumps(m6_share_probe, ensure_ascii=False) if m6_share_probe else 'not probed (round 1 had no successful summon — has_summoned=False)'}  (server-side /health share_count delta; share_creature records BEFORE the clipboard write, so clipboard errors are non-fatal)")
     print(f"share_count_health: before={share_count_before} after={m6_share_probe.get('share_after') if m6_share_probe else None}  (from /health json share_count, M6 server-side share counter)")

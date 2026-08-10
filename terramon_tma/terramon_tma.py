@@ -330,6 +330,25 @@ def _reflect_on_memory(seeds: list[ThoughtSeed], new_agent: str) -> str:
     )
 
 
+def _share_code_from_seed(seed) -> str:
+    """M6: 8-char share code for the Telegram deep link on the share card.
+
+    Prefers a stored ``share_code`` attribute on the seed; falls back to the
+    timestamp-derived code (identical derivation to summon_service's
+    AgentSummoned event) so a real creature always gets a deep link. Never
+    raises — a missing attribute yields an empty string.
+    """
+    if seed is None:
+        return ""
+    code = getattr(seed, "share_code", "") or ""
+    if code:
+        return code
+    ts = getattr(seed, "timestamp", "") or ""
+    if ts:
+        return ts.replace(":", "").replace("-", "").replace(".", "")[-8:]
+    return ""
+
+
 class TerramonState(rx.State):
     """Backend state — runs in Python, drives the agentic summon loop."""
 
@@ -349,6 +368,7 @@ class TerramonState(rx.State):
     reflection: str = ""
     insight: str = ""
     place: str = ""  # v2: geographic anchor — "Kraków, Poland" or "50.06, 19.94"
+    share_code: str = ""  # M6: 8-char code for the Telegram deep link on the share card
     intelligence: int = 0
     photo_mode: bool = False
     summoning: bool = False  # animation flag (SIN 1 fix: loading state)
@@ -708,6 +728,7 @@ class TerramonState(rx.State):
             self.minted = False
             self.minted_at = ""
             seeds = _MEMORY.load_all_seeds()
+            self.share_code = _share_code_from_seed(seeds[-1] if seeds else None)
             self.reflection = _reflect_on_memory(seeds, result.agent)
             if seeds:
                 last_insight = seeds[-1].insight
@@ -1110,6 +1131,7 @@ class TerramonState(rx.State):
         )
         self.agent_lat = seed.lat or 0.0
         self.agent_lon = seed.lon or 0.0
+        self.share_code = _share_code_from_seed(seed)
         self.released_just_now = seed.status == "released"
         self.agent_name = seed.summoned_agent
         self.agent_message = (
@@ -2005,12 +2027,23 @@ class TerramonState(rx.State):
         # M6 share counter: record EVERY share attempt on the persisted
         # share registry (JsonMemory.record_share) for the /health KPI.
         _MEMORY.record_share()
+        _place = self.place or self.geo_place
+        if not _place and self.agent_lat and self.agent_lon:
+            _place = f"{self.agent_lat:.2f}, {self.agent_lon:.2f}"
+        if _place == "0.00, 0.00":
+            _place = ""
+        _place_line = f"📍 {_place}\n" if _place else ""
+        if self.share_code:
+            _link = f"🔗 https://t.me/terrramonBot/terramon?startapp=share_{self.share_code}"
+        else:
+            _link = "🌍 https://t.me/terrramonBot/terramon"
         card = (
             f"🃏 Terramon — {self.agent}\n"
             f"✦ Rarity: {self.rarity} {self.sigil}\n"
             f"   \"{self.thought}\"\n"
             f"Lv.{self.level} · Встречено {self.released_count} из 5 мыслей\n"
-            f"🌍 terramon.app"
+            f"{_place_line}"
+            f"{_link}"
         )
         yield rx.set_clipboard(card)
         self.agent_message = "📤 Creature card copied! Share it anywhere."
@@ -4165,7 +4198,7 @@ def health(request):
         alby_configured = False
     return JSONResponse({
         "status": "ok",
-        "tests": 437,  # pytest count, synced at iter-17 (auto-verify guards)
+        "tests": 451,  # pytest count, synced at iter-18 (share-card geo + KPI auto-verify probe)
         "data_persisted": data_persisted,
         "mint_count": mint_count,
         "seed_count": seed_count,
