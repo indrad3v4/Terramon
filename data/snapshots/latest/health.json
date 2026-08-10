@@ -1,13 +1,17 @@
 {
   "status": "ok",
-  "tests": 451,
+  "tests": 458,
   "data_persisted": false,
+  "data_restored_from_snapshot": true,
+  "restored_mint_count": 0,
+  "restored_seed_count": 14,
+  "restored_share_count": 1,
+  "snapshot_ts": "2026-08-10T05:49:34.068941+00:00",
   "mint_count": 0,
-  "seed_count": 14,
+  "seed_count": 40,
   "player_count": 0,
   "returning_players_7d": 0,
-  "share_count": 1,
-  "shares_7d": 1,
-  "alby_configured": true,
-  "snapshot_ts": "2026-08-10T04:46:47.519038+00:00"
+  "share_count": 5,
+  "shares_7d": 4,
+  "alby_configured": true
 }

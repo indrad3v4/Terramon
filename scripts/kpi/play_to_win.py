@@ -378,6 +378,106 @@ def _button_is_covered(page, locator):
     except Exception:
         return False
 
+# M6: once-per-session share-probe gate. The probe clicks '📤 Share'
+# EXACTLY ONCE per session — whichever path fires first wins: the in-loop
+# path (round with has_summoned=True) or the post-loop M7 probe path (the
+# guaranteed fresh summon, when all 12 archetypes are already seeded on
+# prod so the in-loop gate never fires). Module-level so both the round
+# loop (module scope) and run_m7_mint_probe can read/set it.
+M6_SHARE_PROBE_DONE = False
+
+def run_share_probe(page, ctx, share_count_before, probe_label="m6-share-probe") -> dict:
+    """M6 share probe: click '📤 Share' EXACTLY ONCE on the live creature
+    card's Care tab and read the deep-link card back from the clipboard.
+
+    share_creature() records EVERY share attempt on the persisted share
+    registry (JsonMemory.record_share) BEFORE the clipboard write, so the
+    /health share_count delta is the authoritative M6 signal — clipboard
+    exceptions in headless Chromium are caught and logged (non-fatal);
+    the server-side counter is what matters. Safe to call on a page whose
+    Care tab is already active (the share button lives on the Care tab of
+    a live creature card); never raises — always returns the share_probe
+    dict.
+    """
+    share_probe = {"share_before": share_count_before, "share_after": None,
+                   "share_delta": None, "share_clicked": False,
+                   "clipboard_error": None, "clipboard_read": False,
+                   "share_deep_link": False, "share_link_in_text": False,
+                   "share_card_has_birthplace": False,
+                   "share_card_text_snippet": ""}
+    try:
+        share_btn = page.locator("button:has-text('📤 Share')").first
+        if share_btn.count() > 0 and share_btn.is_visible():
+            # M6 clipboard permissions: the share card is written to the
+            # CLIPBOARD via rx.set_clipboard (share_creature) — the deep
+            # link + 📍 birthplace never enter the DOM. Grant clipboard
+            # access on the context BEFORE the click so
+            # navigator.clipboard.readText() works. Non-fatal: headless
+            # Chromium may refuse clipboard-write; grant at least
+            # clipboard-read.
+            try:
+                ctx.grant_permissions(
+                    ["clipboard-read", "clipboard-write"],
+                    origin=page.url.split("?")[0] if page.url else None,
+                )
+            except Exception as e:
+                try:
+                    ctx.grant_permissions(["clipboard-read", "clipboard-write"])
+                except Exception as e2:
+                    print(f"   [{probe_label}] clipboard permission grant failed (not fatal): {str(e2)[:120]}")
+            share_btn.click(timeout=4000)
+            share_probe["share_clicked"] = True
+            print(f"   [{probe_label}] clicked '📤 Share' once")
+            page.wait_for_timeout(2500)
+            # M6 deep-link evidence: the iter-18 share card renders the
+            # Telegram deep link (link emoji + 'https://t.me/...' +
+            # '?startapp=share_' + share_code) and a 📍 birthplace line.
+            # The REAL card lives in the CLIPBOARD (share_creature ->
+            # rx.set_clipboard) — read it back; on any clipboard
+            # failure/empty read, fall back to the DOM scan. Reads are
+            # non-fatal — on any failure the initialized defaults
+            # (False/"") stay in share_probe.
+            clipboard_text = None
+            try:
+                # headless Chromium: readText() needs the page focused +
+                # the ClipboardReadWrite feature flag (added at launch).
+                try:
+                    page.bring_to_front()
+                except Exception:
+                    pass
+                clipboard_text = page.evaluate("() => navigator.clipboard.readText()")
+                share_probe["clipboard_read"] = True
+                share_probe["clipboard_error"] = None
+            except Exception as e:
+                share_probe["clipboard_read"] = False
+                share_probe["clipboard_error"] = str(e)[:120]
+                print(f"   [{probe_label}] clipboard read failed (not fatal): {str(e)[:120]}")
+            if clipboard_text:
+                share_probe["share_deep_link"] = "startapp=share_" in clipboard_text
+                share_probe["share_card_has_birthplace"] = "📍" in clipboard_text
+                share_probe["share_card_text_snippet"] = re.sub(r"\s+", " ", clipboard_text).strip()[:200]
+                print(f"   [{probe_label}] deep-link evidence read from the clipboard card")
+            else:
+                # Fallback: DOM scan (iter-18+ keeps the card in the
+                # clipboard only, but older deploys may render it in the
+                # body). locator.all() is Playwright's documented API for
+                # iterating matches — Locator objects are NOT iterable.
+                body_text = page.locator("body").inner_text()
+                hrefs = [a.get_attribute("href") for a in page.locator("a[href*='t.me']").all()]
+                share_probe["share_deep_link"] = any(h and "startapp=share_" in h for h in hrefs)
+                share_probe["share_link_in_text"] = "startapp=share_" in body_text
+                share_probe["share_card_has_birthplace"] = "📍" in body_text
+                share_probe["share_card_text_snippet"] = re.sub(r"\s+", " ", body_text).strip()[:200]
+        else:
+            print(f"   [{probe_label}] no '📤 Share' button visible on Care tab")
+    except Exception as e:
+        share_probe["clipboard_error"] = str(e)[:120]
+        print(f"   [{probe_label}] share click failed (not fatal): {str(e)[:120]}")
+    share_probe["share_after"] = fetch_share_count()
+    if isinstance(share_probe["share_before"], int) and isinstance(share_probe["share_after"], int):
+        share_probe["share_delta"] = share_probe["share_after"] - share_probe["share_before"]
+    return share_probe
+
 def run_m7_mint_probe(browser, thought, candidate_label="probe"):
     """M7 mint-loop invoice probe: summon `thought` in a fresh context and,
     IF the creature-card MINT area renders, click '⚡ Mint via Lightning'
@@ -398,8 +498,10 @@ def run_m7_mint_probe(browser, thought, candidate_label="probe"):
     mint that would fabricate mint_count on prod), never '✅ I've paid —
     verify', never pay. Returns the m7_probe dict.
     """
+    global M6_SHARE_PROBE_DONE
     m7_probe = {"probe_thought": thought, "probe_seed_created": False,
                 "mint_button_presence": False, "mint_ui_state": None,
+                "mint_price_sats": None,
                 "mint_clicked": False, "invoice_ok": None, "invoice_msg": None,
                 "auto_verify_seen": False, "auto_verify_marker": None,
                 "alby_configured": None}
@@ -463,7 +565,26 @@ def run_m7_mint_probe(browser, thought, candidate_label="probe"):
         mint_body = probe_page.locator("body").inner_text()
         m7_probe["mint_button_presence"] = "⚡ MINT ·" in mint_body
         m7_probe["mint_ui_state"] = mint_ui_state_from_body(mint_body)
-        print(f"   [m7-probe:{candidate_label}] MINT area: presence={m7_probe['mint_button_presence']}, ui_state={m7_probe['mint_ui_state']}")
+        # Mint price: the live app renders the button label '⚡ MINT · N sats'
+        # (terramon_tma.py mint area) — parse N when the MINT area is visible
+        # (price_sats > 0 AND can_mint); None when not found.
+        mint_price_match = re.search(r"⚡\s*MINT\s*·\s*(\d+)\s*sats", mint_body)
+        m7_probe["mint_price_sats"] = int(mint_price_match.group(1)) if mint_price_match else None
+        print(f"   [m7-probe:{candidate_label}] MINT area: presence={m7_probe['mint_button_presence']}, ui_state={m7_probe['mint_ui_state']}, mint_price_sats={m7_probe['mint_price_sats']}")
+        # M6: share probe on the GUARANTEED fresh summon (post-loop path).
+        # The in-loop share probe (gated on has_summoned) never fires when
+        # all 12 archetypes are already seeded on prod — so run the share
+        # probe HERE on the fresh-summon card instead, now that the Care
+        # tab is active and the card is live (share button and mint button
+        # live on the same Care-tab card). The once-per-session gate
+        # M6_SHARE_PROBE_DONE guarantees '📤 Share' is clicked at most
+        # once across the whole run — whichever path fires first wins.
+        if not M6_SHARE_PROBE_DONE:
+            m7_probe["m6_share_probe_postloop"] = run_share_probe(
+                probe_page, probe_ctx, share_count_before,
+                probe_label="m6-share-probe-postloop",
+            )
+            M6_SHARE_PROBE_DONE = True
         # IF the MINT area is live: click '⚡ Mint via Lightning' EXACTLY
         # ONCE — invoice creation only, no mint record is created (minting
         # happens only on settle via verify_lightning), same honest spirit
@@ -503,16 +624,17 @@ def run_m7_mint_probe(browser, thought, candidate_label="probe"):
                     print(f"   [m7-probe:{candidate_label}] '⚡ Mint via Lightning' present but no visible, uncovered button found (not fatal)")
             except Exception as e:
                 print(f"   [m7-probe:{candidate_label}] '⚡ Mint via Lightning' click failed (not fatal): {str(e)[:120]}")
-        # M6 share probe: NOT part of this mint-loop function — it runs
-        # separately in round 1 of the THOUGHTS loop below (gated on
-        # 'round_no == 1 and has_summoned'). This comment also marks the
-        # end of the mint-probe block for the source-level guard tests
-        # (tests/test_kpi_geo_gate.py Contract 2 scans from the m7_probe
-        # record up to the first 'M6 share probe' marker after it): the
-        # ONLY click in this block is the single '⚡ Mint via Lightning'
-        # invoice-creation click above (at most once per run — the
-        # post-loop caller stops at the first candidate with a live MINT
-        # area).
+        # M6 share probe: the in-loop round path (gated on
+        # 'round_no == 1 and has_summoned') and this post-loop path share
+        # the once-per-session run_share_probe() click, gated by the
+        # module-level M6_SHARE_PROBE_DONE flag. This comment also marks
+        # the end of the mint-probe block for the source-level guard
+        # tests (tests/test_kpi_geo_gate.py Contract 2 scans from the
+        # m7_probe record up to the first 'M6 share probe' marker after
+        # it): the ONLY click in this block is the single '⚡ Mint via
+        # Lightning' invoice-creation click above (at most once per run —
+        # the post-loop caller stops at the first candidate with a live
+        # MINT area).
         probe_body_after_invoice = probe_page.locator("body").inner_text()
         m7_probe["invoice_ok"], m7_probe["invoice_msg"] = parse_invoice_status(
             probe_body_after_invoice
@@ -552,7 +674,7 @@ def run_m7_mint_probe(browser, thought, candidate_label="probe"):
     return m7_probe
 
 with sync_playwright() as p:
-    browser = p.chromium.launch(headless=True, args=["--no-sandbox"])
+    browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--enable-features=ClipboardReadWrite"])
     # TMA-Studio honest attempt: the pages.dev demo is a marketing landing
     # page (verified from source + live probe) — probe once with ?appUrl=,
     # record the outcome, and fall back to the injected mock either way.
@@ -573,6 +695,13 @@ with sync_playwright() as p:
     # the clipboard write, so headless clipboard failures don't matter).
     share_count_before = fetch_share_count()
     print(f"[m6-share-probe] share_count_before: {share_count_before}  (from /health json share_count, read before the session)")
+    # M6: once-per-session probe gate — module-level M6_SHARE_PROBE_DONE
+    # (defined next to run_share_probe). The probe fires on the FIRST
+    # round that produces a fresh summon (has_summoned=True), whichever
+    # round number that is (all 12 archetypes are seeded on prod, so
+    # round 1 normally hits the dedup path and has_summoned=False); if
+    # the in-loop gate never fires, the post-loop M7 probe path runs the
+    # share probe on its guaranteed fresh summon instead.
 
     for theme, thought in THOUGHTS:
         if len(collected) >= CAP:
@@ -742,48 +871,18 @@ with sync_playwright() as p:
             except Exception as e:
                 print(f"   [m7-care] body read failed (not fatal): {str(e)[:120]}")
 
-            # M6 share probe (round 1 only, Care tab, after a successful
-            # summon where has_summoned=True): click '📤 Share' EXACTLY
-            # ONCE. share_creature() records EVERY share attempt on the
-            # persisted share registry (JsonMemory.record_share) BEFORE the
-            # clipboard write, so the /health share_count delta is the
+            # M6 share probe (first fresh summon, Care tab, after a
+            # successful summon where has_summoned=True): click '📤 Share'
+            # EXACTLY ONCE. share_creature() records EVERY share attempt on
+            # the persisted share registry (JsonMemory.record_share) BEFORE
+            # the clipboard write, so the /health share_count delta is the
             # authoritative M6 signal — clipboard exceptions in headless
             # Chromium are caught and logged (non-fatal); the server-side
             # counter is what matters.
-            if round_no == 1 and has_summoned:
-                share_probe = {"share_before": share_count_before, "share_after": None,
-                               "share_delta": None, "share_clicked": False,
-                               "clipboard_error": None,
-                               "share_deep_link": False, "share_link_in_text": False,
-                               "share_card_has_birthplace": False,
-                               "share_card_text_snippet": ""}
-                try:
-                    share_btn = page.locator("button:has-text('📤 Share')").first
-                    if share_btn.count() > 0 and share_btn.is_visible():
-                        share_btn.click(timeout=4000)
-                        share_probe["share_clicked"] = True
-                        print("   [m6-share-probe] clicked '📤 Share' once")
-                        page.wait_for_timeout(2500)
-                        # M6 deep-link evidence: the iter-18 share card renders the
-                        # Telegram deep link (link emoji + 'https://t.me/...' +
-                        # '?startapp=share_' + share_code) and a 📍 birthplace line.
-                        # Reads are non-fatal — on any failure the initialized
-                        # defaults (False/"") stay in share_probe.
-                        body_text = page.locator("body").inner_text()
-                        hrefs = [a.get_attribute("href") for a in page.locator("a[href*='t.me']")]
-                        share_probe["share_deep_link"] = any(h and "startapp=share_" in h for h in hrefs)
-                        share_probe["share_link_in_text"] = "startapp=share_" in body_text
-                        share_probe["share_card_has_birthplace"] = "📍" in body_text
-                        share_probe["share_card_text_snippet"] = re.sub(r"\s+", " ", body_text).strip()[:200]
-                    else:
-                        print("   [m6-share-probe] no '📤 Share' button visible on Care tab")
-                except Exception as e:
-                    share_probe["clipboard_error"] = str(e)[:120]
-                    print(f"   [m6-share-probe] share click failed (not fatal): {str(e)[:120]}")
-                share_probe["share_after"] = fetch_share_count()
-                if isinstance(share_probe["share_before"], int) and isinstance(share_probe["share_after"], int):
-                    share_probe["share_delta"] = share_probe["share_after"] - share_probe["share_before"]
+            if not M6_SHARE_PROBE_DONE and has_summoned:
+                share_probe = run_share_probe(page, ctx, share_count_before)
                 rlog["m6_share_probe"] = share_probe
+                M6_SHARE_PROBE_DONE = True
                 print(f"[m6-share-probe] {json.dumps(share_probe, ensure_ascii=False)}")
 
             # M7 round-1 probe (dedup card): the 12 THOUGHTS are all seeded
@@ -882,6 +981,7 @@ with sync_playwright() as p:
         m7_probe = m7_probe_attempts[-1] if m7_probe_attempts else {
             "probe_thought": None, "probe_seed_created": False,
             "mint_button_presence": False, "mint_ui_state": None,
+            "mint_price_sats": None,
             "mint_clicked": False, "invoice_ok": None, "invoice_msg": None,
             "auto_verify_seen": False, "auto_verify_marker": None,
             "alby_configured": None}
@@ -907,9 +1007,11 @@ with sync_playwright() as p:
     print(f"m7_probe_attempts: {json.dumps(m7_probe_attempts, ensure_ascii=False)}  (candidate attempts in order Lover -> Magician -> Caregiver, stopped at the first with a live MINT area; each attempt used its own run-unique timestamped English thought in a fresh context)")
     print(f"auto_verify_seen: {m7_probe.get('auto_verify_seen')}  (post-loop mint probe, ~7s after the single '⚡ Mint via Lightning' invoice-creation click: '⏳ Auto-checking payment… N/30' visible in the invoice panel = the hidden rx.moment poller (6s tick, LIGHTNING_VERIFY_INTERVAL_MS) is ARMED on the live prod deploy; False = iter-17 auto-verify absent on this deploy or the poll already gave up — recorded honestly, absence is never a pass)")
     print(f"auto_verify_marker: {m7_probe.get('auto_verify_marker')}  (the matched invoice-panel body line, e.g. '⏳ Auto-checking payment… 1/30', or None)")
+    print(f"mint_price_sats: {m7_probe.get('mint_price_sats')}  (post-loop mint probe, fresh-summon creature card: Lightning mint price parsed from the '⚡ MINT · N sats' button label; None when the MINT area is not live — the price renders only when price_sats > 0 AND can_mint, and has a 3000-sat floor per LIGHTNING_MIN_MINT_SATS)")
     print(f"place_name_rounds: {json.dumps([r.get('m2_after_care', {}).get('place_name_after_care') for r in round_log], ensure_ascii=False)}  (M1 geo evidence: human place name from the creature card's 📍 line — the UI shows 'Kraków, Polska' style names, not raw coords; None when the card shows no place name)")
     m6_share_probe = next((r.get("m6_share_probe") for r in round_log if r.get("m6_share_probe") is not None), None)
-    print(f"m6_share_probe (round 1): {json.dumps(m6_share_probe, ensure_ascii=False) if m6_share_probe else 'not probed (round 1 had no successful summon — has_summoned=False)'}  (server-side /health share_count delta; share_creature records BEFORE the clipboard write, so clipboard errors are non-fatal)")
+    print(f"m6_share_probe (round 1): {json.dumps(m6_share_probe, ensure_ascii=False) if m6_share_probe else 'not probed (no round produced a fresh summon — has_summoned never True)'}  (server-side /health share_count delta; share_creature records BEFORE the clipboard write, so clipboard errors are non-fatal)")
+    print(f"m6_share_probe_postloop: {json.dumps(m7_probe.get('m6_share_probe_postloop'), ensure_ascii=False) if m7_probe.get('m6_share_probe_postloop') else 'not probed (no live fresh-summon card)'}  (post-loop share probe on the guaranteed fresh summon — deep link + 📍 birthplace read from the clipboard via navigator.clipboard.readText(); share_creature writes the card to the clipboard, so clipboard evidence is the authoritative M6 deep-link signal)")
     print(f"share_count_health: before={share_count_before} after={m6_share_probe.get('share_after') if m6_share_probe else None}  (from /health json share_count, M6 server-side share counter)")
     mc = fetch_mint_count()
     print(f"mint_count_health: {mc}  (from /health, json mint_count)")
