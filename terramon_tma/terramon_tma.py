@@ -8,7 +8,10 @@ UI/UX SINS FIXED (July 2026, after ccgs-p + prism audit):
   SIN 3 — Empty state hook too dim (#d8b4fe on #0b0b0f)
     FIX: brighter text (#c4b5fd) + subtle box-shadow aura behind hook
   SIN 4 — No creature image shown on card
-    FIX: art placeholder (sigil as oversized glyph) + color glow
+    FIX: FAL portrait rendered on the main card + terra grid (Lesson 13:
+    the portrait is the thought vector made visible). /creature-art route
+    serves data/creatures/*.png; the sigil stays as fallback while art is
+    still generating (bounded rx.moment poller, mirrors the lightning one).
   SIN 5 — CAPTURE and SUMMON same visual weight
     FIX: CAPTURE = outline variant, SUMMON = solid amber primary
   SIN 6 — XP bar is flat (no transition/animation)
@@ -29,7 +32,7 @@ UI/UX SINS FIXED (July 2026, after ccgs-p + prism audit):
 
 from __future__ import annotations
 
-import json, logging, sys, traceback, uuid
+import json, logging, os, sys, traceback, uuid
 
 # Logging setup — writes to stderr (visible in Railway logs)
 logging.basicConfig(
@@ -45,6 +48,7 @@ from pathlib import Path
 
 import segno
 
+from terramon.adapters.portrait_serve import creature_art_url, portrait_file_path
 from terramon.adapters.embedding_classifier import EmbeddingClassifier
 from terramon.adapters.alby_hub_adapter import AlbyHubAdapter
 from terramon.adapters.json_memory import JsonMemory
@@ -446,7 +450,8 @@ class TerramonState(rx.State):
 
     # Phase 4 — economy & retention
     last_tick: str = ""  # ISO timestamp of last decay tick
-    agent_portrait: str = ""  # FAL.ai generated portrait path
+    agent_portrait: str = ""  # FAL.ai generated portrait path → /creature-art URL
+    portrait_pending: bool = False  # Lesson 13: bounded poller armed while FAL draws
     can_mint: bool = False  # Bayesian confidence gate for MINT
 
     # Phase 19 — Creature state machine display
@@ -970,6 +975,9 @@ class TerramonState(rx.State):
             except Exception as _e:
                 log.debug("Portrait generation skipped: %s", _e)
         threading.Thread(target=_gen_portrait, daemon=True).start()
+        # Lesson 13: arm the bounded portrait poller so the art pops in
+        # while the player watches (the thread cannot touch Reflex state).
+        self.portrait_pending = True
 
     @rx.event
     def see_birthplace(self):
@@ -1103,6 +1111,11 @@ class TerramonState(rx.State):
                     break
         except Exception as e:
             log.warning(f"Candle state sync failed: {e}")
+
+        # Lesson 13: refresh the current creature's portrait from the
+        # registry (survives redeploys — the art lives on the volume).
+        self.portrait_pending = False
+        self.refresh_portrait()
 
     @rx.event
     def on_init_data(self, result):
@@ -2239,14 +2252,59 @@ class TerramonState(rx.State):
 
     @rx.event
     def refresh_portrait(self):
-        """Refresh creature portrait from the registry (called on mount)."""
+        """Refresh the current creature's portrait from the registry.
+
+        Lesson 13: the portrait is the thought vector made visible — look it
+        up in the content-addressed registry (blake2b(thought, archetype,
+        rarity)) and expose it as a local /creature-art URL. The current
+        creature is the LAST seed, so this never depends on localStorage
+        restore order. Silent fail: sigil fallback while art is drawing.
+        """
         try:
+            seeds = _MEMORY.load_all_seeds()
+            if not seeds:
+                return
+            s = seeds[-1]
             from terramon.application.portrait_gen import get_portrait
-            _p = get_portrait(self.thought, self.agent, self.rarity)
+            _rarity = s.rarity if isinstance(s.rarity, str) else s.rarity.value
+            _p = get_portrait(s.raw_input, s.summoned_agent, _rarity)
             if _p:
-                self.agent_portrait = _p
+                self.agent_portrait = creature_art_url(_p)
         except Exception as e:
             log.debug(f"Portrait refresh skipped: {e}")
+
+    @rx.event
+    def poll_portrait(self, _tick=None):
+        """Bounded portrait poller (mirrors the lightning rx.moment pattern).
+
+        The FAL generation thread cannot touch Reflex state, so while
+        portrait_pending is armed this polls the registry every 4s; once the
+        art lands it refreshes the main card AND the whole terra grid, then
+        disarms. No-op when not pending — cheap forever-tick.
+        """
+        if not self.portrait_pending:
+            return
+        self.refresh_portrait()
+        if self.agent_portrait != "":
+            self.portrait_pending = False
+            try:
+                seeds = _MEMORY.load_all_seeds()
+                self.terra = [_seed_to_card(s) for s in seeds]
+            except Exception as _e:
+                log.debug(f"Terra portrait refresh skipped: {_e}")
+
+
+def _portrait_url_for(seed: ThoughtSeed) -> str:
+    """Resolve a seed's cached portrait to a local /creature-art URL ('' if none)."""
+    try:
+        from terramon.application.portrait_gen import get_portrait
+        _rarity = seed.rarity if isinstance(seed.rarity, str) else seed.rarity.value
+        _p = get_portrait(seed.raw_input, seed.summoned_agent, _rarity)
+        if _p:
+            return creature_art_url(_p)
+    except Exception:
+        pass
+    return ""
 
 
 def _seed_to_card(seed: ThoughtSeed) -> dict:
@@ -2276,6 +2334,8 @@ def _seed_to_card(seed: ThoughtSeed) -> dict:
         "lon": getattr(seed, "lon", None),
         "place": getattr(seed, "place_name", "")
                  or (f"{getattr(seed, 'lat', 0):.2f}, {getattr(seed, 'lon', 0):.2f}" if getattr(seed, "lat", None) is not None else ""),
+        # Lesson 13: cached FAL portrait → local URL ('' = art still drawing)
+        "portrait": _portrait_url_for(seed),
     }
     return card
 
@@ -2339,12 +2399,23 @@ def terra_card(item: dict) -> rx.Component:
                 ),
                 rx.fragment(),
             ),
-            rx.text(
-                item["sigil"],
-                font_size="1.8em",
-                letter_spacing="0.2em",
-                color=rx.cond(item["released"], "#6b7280", item["color"]),
-                text_shadow=f"0 0 16px {item['color']}66",
+            rx.cond(
+                item["portrait"] != "",
+                rx.image(
+                    src=item["portrait"],
+                    width="100%",
+                    height="auto",
+                    border_radius="8px",
+                    border="1px solid #27272a",
+                    opacity=rx.cond(item["released"], "0.6", "1.0"),
+                ),
+                rx.text(
+                    item["sigil"],
+                    font_size="1.8em",
+                    letter_spacing="0.2em",
+                    color=rx.cond(item["released"], "#6b7280", item["color"]),
+                    text_shadow=f"0 0 16px {item['color']}66",
+                ),
             ),
             rx.heading(item["agent"], size="5",
                        color=rx.cond(item["released"], "#6b7280", item["color"])),
@@ -3368,6 +3439,9 @@ def _lightning_invoice_panel() -> rx.Component:
                 rx.moment(interval=6000, on_change=TerramonState.verify_lightning, display="none"),
                 rx.fragment(),
             ),
+            # Lesson 13: portrait poller — always mounted, cheap no-op when
+            # portrait_pending is False (sigil → art swap appears in-session).
+            rx.moment(interval=4000, on_change=TerramonState.poll_portrait, display="none"),
             rx.button(
                 "🔄 New invoice",
                 on_click=TerramonState.pay_lightning,
@@ -3750,13 +3824,28 @@ def index() -> rx.Component:
                                 rx.fragment(),
                             ),
                             rx.vstack(
-                                rx.text(TerramonState.sigil, font_size="2.8em",
+                                rx.cond(
+                                    TerramonState.agent_portrait != "",
+                                    rx.image(
+                                        src=TerramonState.agent_portrait,
+                                        width="170px",
+                                        height="170px",
+                                        object_fit="cover",
+                                        border_radius="14px",
+                                        border="1px solid #27272a",
+                                        box_shadow="0 0 24px rgba(255,215,0,0.15)",
+                                    ),
+                                    rx.text(
+                                        TerramonState.sigil,
+                                        font_size="2.8em",
                                         color=rx.cond(TerramonState.goal_reached, "#f59e0b", TerramonState.color),
                                         text_shadow=rx.cond(
                                             TerramonState.goal_reached,
                                             "0 0 40px rgba(245,158,11,0.6)",
                                             TerramonState.rarity_glow_style,
-                                        )),
+                                        ),
+                                    ),
+                                ),
                                 rx.text(TerramonState.agent, color=rx.cond(TerramonState.goal_reached, "#f59e0b", TerramonState.color),
                                         font_weight="bold", font_size="1em"),
                                 rx.text('"' + TerramonState.thought[:40] + '"',
@@ -4319,7 +4408,32 @@ def static_map(request):
     )
 
 
+def creature_art(request):
+    """Lesson 13: serve a generated creature portrait PNG (traversal-safe).
+
+    Query param: name=portrait_<32-hex>.png | thumb_<32-hex>.png. Files live
+    on the Railway volume under data/creatures/; content-addressed filenames
+    are immutable, so a 7-day Cache-Control is safe.
+    """
+    from starlette.responses import Response
+
+    name = request.query_params.get("name", "")
+    fp = portrait_file_path(name, os.environ.get("TERRAMON_DATA_DIR", "data"))
+    if fp is None:
+        return Response(status_code=404, content=b"not found")
+    try:
+        png = fp.read_bytes()
+    except Exception as exc:
+        return Response(status_code=500, content=str(exc).encode())
+    return Response(
+        content=png,
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=604800"},
+    )
+
+
 # Register the health endpoint on the underlying Starlette app
 app._api.add_route("/health", health, methods=["GET"])
 app._api.add_route("/static-map", static_map, methods=["GET"])
+app._api.add_route("/creature-art", creature_art, methods=["GET"])
 
