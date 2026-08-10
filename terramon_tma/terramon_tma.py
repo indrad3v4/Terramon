@@ -48,6 +48,7 @@ import segno
 from terramon.adapters.embedding_classifier import EmbeddingClassifier
 from terramon.adapters.alby_hub_adapter import AlbyHubAdapter
 from terramon.adapters.json_memory import JsonMemory
+from terramon.adapters.durability import restore_counters_if_wiped
 from terramon.adapters.static_map import (
     render_static_map,
     static_map_endpoint_path,
@@ -205,6 +206,33 @@ except Exception as _boot_err:  # best-effort: never crash the app on marker I/O
     DATA_PERSISTED = False
     log.warning(
         "boot-epoch marker I/O failed (data dir not writable?): %s", _boot_err
+    )
+
+# ── Snapshot restore (durability across Railway volume wipes) ──────
+# The LOOP snapshots the /health COUNTERS to data/snapshots/latest/
+# health.json at ship time (scripts/kpi/snapshot_data.py) and commits it
+# to git (.gitignore negations keep data/snapshots/ trackable; the
+# .dockerignore only excludes data/*.jsonl, so the snapshot also survives
+# into the Docker image). On boot, when data/tma_memory.jsonl is MISSING
+# or EMPTY (volume not attached -> wiped on redeploy), restore the real
+# counters from that snapshot so the KPI evidence
+# (mint_count/share_count/seed_count) survives infra wipes. No fabricated
+# data: only the app's own previously-observed counters, clearly labeled
+# via data_restored_from_snapshot + restored_* fields in /health.
+_SNAPSHOT_RESTORED = False
+_RESTORED_COUNTS = {}
+_SNAPSHOT_TS = None
+try:
+    _snap_restore = restore_counters_if_wiped(_MEMORY_PATH)
+    _SNAPSHOT_RESTORED = bool(_snap_restore.get("restored"))
+    _RESTORED_COUNTS = _snap_restore.get("counts") or {}
+    _SNAPSHOT_TS = _snap_restore.get("snapshot_ts")
+except Exception as _snap_err:  # best-effort: never crash the app on restore I/O
+    _SNAPSHOT_RESTORED = False
+    _RESTORED_COUNTS = {}
+    _SNAPSHOT_TS = None
+    log.warning(
+        "snapshot restore check failed (continuing without restore): %s", _snap_err
     )
 
 # ── Player identity (D7 retention cohorts) ──────────────────────────
@@ -4187,6 +4215,29 @@ def health(request):
         alby_configured = bool(
             getattr(_ALBY, "url", None) and getattr(_ALBY, "api_key", None)
         )
+        # Snapshot restore baseline (iter-19): when the data dir was wiped
+        # on redeploy (volume not attached) the LOOP's git-committed
+        # snapshot is the only surviving copy of the app's real counters.
+        # Additive ONLY while _SNAPSHOT_RESTORED is true — a replay of the
+        # app's own previously-observed counts, never fabricated data.
+        _restored_mint = 0
+        _restored_seed = 0
+        _restored_share = 0
+        if getattr(sys.modules.get(__name__), "_SNAPSHOT_RESTORED", False):
+            try:
+                _restored_counts = getattr(
+                    sys.modules.get(__name__), "_RESTORED_COUNTS", None
+                ) or {}
+                _restored_mint = int(_restored_counts.get("mint_count", 0) or 0)
+                _restored_seed = int(_restored_counts.get("seed_count", 0) or 0)
+                _restored_share = int(_restored_counts.get("share_count", 0) or 0)
+            except Exception:
+                _restored_mint = 0
+                _restored_seed = 0
+                _restored_share = 0
+        mint_count += _restored_mint
+        seed_count += _restored_seed
+        share_count += _restored_share
     except Exception:
         data_persisted = False
         mint_count = 0
@@ -4196,10 +4247,37 @@ def health(request):
         share_count = 0
         shares_7d = 0
         alby_configured = False
+        # Degraded path: derived counters are 0, but the restored baseline
+        # (if any) still surfaces so evidence survives even here.
+        _restored_mint = 0
+        _restored_seed = 0
+        _restored_share = 0
+        if getattr(sys.modules.get(__name__), "_SNAPSHOT_RESTORED", False):
+            try:
+                _restored_counts = getattr(
+                    sys.modules.get(__name__), "_RESTORED_COUNTS", None
+                ) or {}
+                _restored_mint = int(_restored_counts.get("mint_count", 0) or 0)
+                _restored_seed = int(_restored_counts.get("seed_count", 0) or 0)
+                _restored_share = int(_restored_counts.get("share_count", 0) or 0)
+            except Exception:
+                _restored_mint = 0
+                _restored_seed = 0
+                _restored_share = 0
+        mint_count = _restored_mint
+        seed_count = _restored_seed
+        share_count = _restored_share
     return JSONResponse({
         "status": "ok",
-        "tests": 451,  # pytest count, synced at iter-18 (share-card geo + KPI auto-verify probe)
+        "tests": 458,  # pytest count, synced at iter-19 (durability snapshot/restore + KPI deep-link probe)
         "data_persisted": data_persisted,
+        "data_restored_from_snapshot": bool(
+            getattr(sys.modules.get(__name__), "_SNAPSHOT_RESTORED", False)
+        ),
+        "restored_mint_count": _restored_mint,
+        "restored_seed_count": _restored_seed,
+        "restored_share_count": _restored_share,
+        "snapshot_ts": getattr(sys.modules.get(__name__), "_SNAPSHOT_TS", "") or "",
         "mint_count": mint_count,
         "seed_count": seed_count,
         "player_count": player_count,

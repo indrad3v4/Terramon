@@ -234,6 +234,18 @@ def fetch_mint_count():
     except Exception as e:
         return f"health fetch failed: {str(e)[:120]}"
 
+def fetch_health_full():
+    """curl /health once and return the FULL parsed json dict, including the
+    durability fields (data_restored_from_snapshot, restored_seed_count,
+    restored_mint_count, restored_share_count, snapshot_ts). {} on failure —
+    non-fatal by design; callers report exactly what /health actually says."""
+    try:
+        with urllib.request.urlopen(URL.rstrip("/") + "/health", timeout=20) as r:
+            return json.loads(r.read().decode())
+    except Exception as e:
+        print(f"   [health] /health full fetch failed (not fatal): {str(e)[:120]}")
+        return {}
+
 # M7 mint-loop probe candidates (post-loop, tried in order): the three
 # THOUGHTS that rendered 'mint visible' on prod in the iter-13 run.
 # ENGLISH IS REQUIRED — the game's EmbeddingClassifier
@@ -741,7 +753,10 @@ with sync_playwright() as p:
             if round_no == 1 and has_summoned:
                 share_probe = {"share_before": share_count_before, "share_after": None,
                                "share_delta": None, "share_clicked": False,
-                               "clipboard_error": None}
+                               "clipboard_error": None,
+                               "share_deep_link": False, "share_link_in_text": False,
+                               "share_card_has_birthplace": False,
+                               "share_card_text_snippet": ""}
                 try:
                     share_btn = page.locator("button:has-text('📤 Share')").first
                     if share_btn.count() > 0 and share_btn.is_visible():
@@ -749,6 +764,17 @@ with sync_playwright() as p:
                         share_probe["share_clicked"] = True
                         print("   [m6-share-probe] clicked '📤 Share' once")
                         page.wait_for_timeout(2500)
+                        # M6 deep-link evidence: the iter-18 share card renders the
+                        # Telegram deep link (link emoji + 'https://t.me/...' +
+                        # '?startapp=share_' + share_code) and a 📍 birthplace line.
+                        # Reads are non-fatal — on any failure the initialized
+                        # defaults (False/"") stay in share_probe.
+                        body_text = page.locator("body").inner_text()
+                        hrefs = [a.get_attribute("href") for a in page.locator("a[href*='t.me']")]
+                        share_probe["share_deep_link"] = any(h and "startapp=share_" in h for h in hrefs)
+                        share_probe["share_link_in_text"] = "startapp=share_" in body_text
+                        share_probe["share_card_has_birthplace"] = "📍" in body_text
+                        share_probe["share_card_text_snippet"] = re.sub(r"\s+", " ", body_text).strip()[:200]
                     else:
                         print("   [m6-share-probe] no '📤 Share' button visible on Care tab")
                 except Exception as e:
@@ -887,6 +913,12 @@ with sync_playwright() as p:
     print(f"share_count_health: before={share_count_before} after={m6_share_probe.get('share_after') if m6_share_probe else None}  (from /health json share_count, M6 server-side share counter)")
     mc = fetch_mint_count()
     print(f"mint_count_health: {mc}  (from /health, json mint_count)")
+    health_full = fetch_health_full()
+    print(f"data_restored_from_snapshot: {health_full.get('data_restored_from_snapshot')}  (from /health json durability field; None when /health does not report it)")
+    print(f"restored_seed_count: {health_full.get('restored_seed_count')}  (from /health json durability field; None when /health does not report it)")
+    print(f"restored_mint_count: {health_full.get('restored_mint_count')}  (from /health json durability field; None when /health does not report it)")
+    print(f"restored_share_count: {health_full.get('restored_share_count')}  (from /health json durability field; None when /health does not report it)")
+    print(f"snapshot_ts: {health_full.get('snapshot_ts')}  (from /health json durability field; None when /health does not report it)")
     print(f"main_card_oye_after_care: {sum(1 for r in round_log if r.get('m2_after_care', {}).get('oye', 0))}")
     # TMA-ENV evidence: which TMA-only features got exercised this run
     tma_rounds_ok = [r["round"] for r in round_log if r.get("tma") and r["tma"].get("webapp_present")]

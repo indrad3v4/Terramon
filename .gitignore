@@ -10,7 +10,7 @@ __pycache__/
 .DS_Store
 .clinerules/
 .idea/
-data/
+data/*
 
 reflex.lock/
 data/creatures/
@@ -18,3 +18,13 @@ data/creature_*.png
 frontend.zip
 .railway/
 .github/workflows/ci.yml
+
+# ── Durability snapshots (iter-19): keep data/snapshots/ trackable ──
+# The LOOP commits the /health counter snapshot (data/snapshots/latest/
+# health.json) to git so it survives Railway redeploys that wipe data/
+# (declared volume not attached). Negations override the 'data/' ignore
+# above — the app replays these counters on boot when the memory file is
+# missing/empty (restore_counters_if_wiped).
+!data/snapshots/
+!data/snapshots/latest/
+!data/snapshots/**
