@@ -165,6 +165,72 @@ def test_days_since_last_mint_skips_broken_timestamps(tmp_path):
     assert memory.days_since_last_mint() == 2
 
 
+# ── 3b. JsonMemory.days_since_first_seed ────────────────────────────────
+
+
+def test_days_since_first_seed_none_on_empty(tmp_path):
+    """No seeds -> None; a seed with an unparseable timestamp is also None."""
+    memory = JsonMemory(tmp_path / "memory.jsonl")
+    assert memory.days_since_first_seed() is None
+
+    # A broken timestamp must be skipped, never fatal — with no other
+    # seeds there is no parseable anchor left -> None.
+    memory.save_seed(
+        ThoughtSeed(
+            raw_input="broken", summoned_agent="Sage", timestamp="not-a-timestamp"
+        )
+    )
+    assert memory.days_since_first_seed() is None
+
+
+def test_days_since_first_seed_takes_oldest(tmp_path):
+    """The EARLIEST summon timestamp wins: 10 d ago beats 2 d ago -> 10."""
+    memory = JsonMemory(tmp_path / "memory.jsonl")
+    ten_days_ago = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
+    two_days_ago = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+    memory.save_seed(
+        ThoughtSeed(raw_input="young", summoned_agent="Sage", timestamp=two_days_ago)
+    )
+    memory.save_seed(
+        ThoughtSeed(raw_input="old", summoned_agent="Sage", timestamp=ten_days_ago)
+    )
+
+    assert memory.days_since_first_seed() == 10  # oldest wins
+
+
+def test_days_since_first_seed_skips_broken_timestamps(tmp_path):
+    """A corrupt timestamp line is skipped; the good seed still anchors."""
+    memory = JsonMemory(tmp_path / "memory.jsonl")
+    memory.save_seed(
+        ThoughtSeed(
+            raw_input="broken", summoned_agent="Sage", timestamp="not-a-timestamp"
+        )
+    )
+    memory.save_seed(
+        ThoughtSeed(
+            raw_input="good",
+            summoned_agent="Sage",
+            timestamp=(datetime.now(timezone.utc) - timedelta(days=2)).isoformat(),
+        )
+    )
+    assert memory.days_since_first_seed() == 2
+
+
+def test_days_since_first_seed_after_mint_anchor_usable(tmp_path):
+    """A later-minted seed still anchors on its SUMMON timestamp, and the
+    first summon is never newer than the newest mint."""
+    memory = JsonMemory(tmp_path / "memory.jsonl")
+    _persist_mint(
+        memory, "creature", (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+    )
+
+    first = memory.days_since_first_seed()
+    last = memory.days_since_last_mint()
+    assert first is not None
+    assert last is not None
+    assert first >= last  # first summon is never newer than newest mint
+
+
 # ── 4. JsonMemory.d7_cohort_stats on disk (tmp_path) ────────────────────
 
 

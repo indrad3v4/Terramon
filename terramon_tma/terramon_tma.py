@@ -4338,17 +4338,21 @@ def health(request):
         # M6 share counter: persisted share registry (JsonMemory).
         share_count = _MEMORY.count_shares()
         shares_7d = _MEMORY.count_shares_since(days=7)
-        # D7 cohort + kill-condition: d7_cohort_stats() / days_since_last_mint()
-        # land in JsonMemory via a parallel task — degrade gracefully to
-        # None/False while they are absent (getattr + callable fallback).
+        # D7 cohort + kill-condition: d7_cohort_stats() /
+        # days_since_last_mint() / days_since_first_seed() land in
+        # JsonMemory via a parallel task — degrade gracefully to None/False
+        # while they are absent (getattr + callable fallback).
         try:
             _d7 = getattr(_MEMORY, "d7_cohort_stats", None)
             d7_stats = _d7(days=7) if callable(_d7) else None
             _dslm = getattr(_MEMORY, "days_since_last_mint", None)
             days_since_last_mint = _dslm() if callable(_dslm) else None
+            _dsfs = getattr(_MEMORY, "days_since_first_seed", None)
+            days_since_first_seed = _dsfs() if callable(_dsfs) else None
         except Exception:
             d7_stats = None
             days_since_last_mint = None
+            days_since_first_seed = None
         # Alby Hub adapter config presence (url + api_key both set).
         alby_configured = bool(
             getattr(_ALBY, "url", None) and getattr(_ALBY, "api_key", None)
@@ -4387,6 +4391,7 @@ def health(request):
         alby_configured = False
         d7_stats = None
         days_since_last_mint = None
+        days_since_first_seed = None
         # Degraded path: derived counters are 0, but the restored baseline
         # (if any) still surfaces so evidence survives even here.
         _restored_mint = 0
@@ -4407,9 +4412,19 @@ def health(request):
         mint_count = _restored_mint
         seed_count = _restored_seed
         share_count = _restored_share
+    # Kill-condition watchdog: 'mint=0 for 30 days'. When no mint has EVER
+    # happened (days_since_last_mint None) the clock anchors to
+    # days_since_first_seed — the FIRST summon / game launch — so the kill
+    # decision can still fire; it stays None only when there is no mint AND
+    # no seed at all. share_rate is the lifetime share-per-summon funnel
+    # (informational; None when there are no summoners).
+    days_mint_zero = (
+        days_since_last_mint if days_since_last_mint is not None else days_since_first_seed
+    )
+    share_rate = (share_count / seed_count) if seed_count > 0 else None
     return JSONResponse({
         "status": "ok",
-        "tests": 496,  # pytest count, synced at iter-22 (mint-ux labels + D7 cohort + KPI parser)
+        "tests": 502,  # pytest count, synced at iter-23 (kill-condition clock anchor + share_rate)
         "data_persisted": data_persisted,
         "data_restored_from_snapshot": bool(
             getattr(sys.modules.get(__name__), "_SNAPSHOT_RESTORED", False)
@@ -4429,10 +4444,10 @@ def health(request):
         "d7_retention": (d7_stats or {}).get("retention_rate"),
         "days_since_last_mint": days_since_last_mint,
         "kill_condition": {
-            "days_mint_zero": days_since_last_mint,
-            "share_rate": None,
+            "days_mint_zero": days_mint_zero,
+            "share_rate": share_rate,
             "triggered": bool(
-                days_since_last_mint is not None and days_since_last_mint >= 30
+                days_mint_zero is not None and days_mint_zero >= 30
             ),
         },
         "alby_configured": alby_configured,

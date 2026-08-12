@@ -390,6 +390,40 @@ class JsonMemory(MemoryPort):
             return None
         return _days_since(newest, _time.time())
 
+    def days_since_first_seed(self) -> int | None:
+        """Whole days (floor) since the FIRST seed was summoned, or None.
+
+        M8 KPI: the anchor for the kill-condition clock ('mint=0 for 30
+        days') when no mint has ever happened — the clock starts at the
+        first summon, not at some arbitrary epoch. Reads each seed's own
+        ``timestamp`` (the summon/birth time — NOT the storage-only
+        ``minted_at``), takes the earliest parseable one, and floors the
+        age in days. Pure offline read — never touches the network;
+        unparseable or missing timestamps are skipped so a broken line
+        cannot crash or poison the minimum. ``None`` means the store has
+        never held a seed.
+        """
+        import time as _time
+        from datetime import datetime
+
+        earliest: float | None = None
+        for seed in self.load_all_seeds():
+            raw = getattr(seed, "timestamp", "") or ""
+            if not raw:
+                continue
+            try:
+                ts = datetime.fromisoformat(str(raw)).timestamp()
+            except (ValueError, TypeError, OverflowError):
+                try:
+                    ts = float(raw)  # epoch-seconds fallback for old records
+                except (TypeError, ValueError):
+                    continue
+            if earliest is None or ts < earliest:
+                earliest = ts
+        if earliest is None:
+            return None
+        return _days_since(earliest, _time.time())
+
     def find_seed(
         self, raw_input: str, summoned_agent: str | None = None
     ) -> ThoughtSeed | None:

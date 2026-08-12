@@ -270,19 +270,30 @@ def test_dockerignore_excludes_boot_epoch_marker():
 class _FakeMemory:
     """Stub JsonMemory for RUNTIME /health tests (no data dir, no I/O).
 
-    ``d7_cohort_stats`` / ``days_since_last_mint`` model the parallel-task
-    methods that may not exist on the real JsonMemory yet — the
-    missing-method test deletes them via monkeypatch to lock the
-    graceful-degradation contract (keys None, kill_condition.triggered
-    False, never a 500).
+    ``d7_cohort_stats`` / ``days_since_last_mint`` / ``days_since_first_seed``
+    model the parallel-task methods that may not exist on the real
+    JsonMemory yet — the missing-method test deletes them via monkeypatch
+    to lock the graceful-degradation contract (keys None,
+    kill_condition.triggered False, never a 500). ``share_count`` /
+    ``seed_count`` let tests exercise the share-per-summon funnel.
     """
 
-    def __init__(self, d7_stats=None, days_since_last_mint=None):
+    def __init__(
+        self,
+        d7_stats=None,
+        days_since_last_mint=None,
+        days_since_first_seed=None,
+        share_count=0,
+        seed_count=0,
+    ):
         self._d7_stats = d7_stats
         self._days_since_last_mint = days_since_last_mint
+        self._days_since_first_seed = days_since_first_seed
+        self._share_count = share_count
+        self._seed_count = seed_count
 
     def load_all_seeds(self):
-        return []
+        return [object() for _ in range(self._seed_count)]
 
     def count_unique_players(self):
         return 0
@@ -291,7 +302,7 @@ class _FakeMemory:
         return 0
 
     def count_shares(self):
-        return 0
+        return self._share_count
 
     def count_shares_since(self, days=7):
         return 0
@@ -301,6 +312,9 @@ class _FakeMemory:
 
     def days_since_last_mint(self):
         return self._days_since_last_mint
+
+    def days_since_first_seed(self):
+        return self._days_since_first_seed
 
 
 def _exec_health(memory) -> dict:
@@ -347,17 +361,27 @@ def test_health_reports_d7_kill_condition_keys(source):
         '"d7_retention": (d7_stats or {}).get("retention_rate")',
         '"days_since_last_mint": days_since_last_mint',
         '"kill_condition": {',
-        '"days_mint_zero": days_since_last_mint',
-        '"share_rate": None',
+        '"days_mint_zero": days_mint_zero',
+        '"share_rate": share_rate',
         '"triggered": bool(',
     ):
         assert key in health, f"health() JSON missing {key!r}"
-    # getattr fallback wiring for both parallel-task methods, plus the
+    # getattr fallback wiring for the parallel-task methods, plus the
     # degraded defaults (inner try/except AND the outer except branch).
     assert 'getattr(_MEMORY, "d7_cohort_stats", None)' in health
     assert 'getattr(_MEMORY, "days_since_last_mint", None)' in health
+    assert 'getattr(_MEMORY, "days_since_first_seed", None)' in health
     assert health.count("d7_stats = None") >= 2
     assert "days_since_last_mint = None" in health
+    assert "days_since_first_seed = None" in health
+    # Kill-clock fallback: with no mint ever, days_mint_zero anchors to
+    # days_since_first_seed; share_rate is the lifetime share-per-summon
+    # funnel and None only when there are no summoners.
+    assert (
+        "days_since_last_mint if days_since_last_mint is not None else days_since_first_seed"
+        in health
+    )
+    assert "(share_count / seed_count) if seed_count > 0 else None" in health
 
 
 def test_health_d7_stats_flow():
@@ -419,3 +443,42 @@ def test_health_kill_condition_triggered_at_30_days():
         _exec_health(_FakeMemory(days_since_last_mint=0))["kill_condition"]["triggered"]
         is False
     )
+
+
+def test_health_kill_clock_anchors_to_first_seed_when_no_mint():
+    """No mint has EVER happened (days_since_last_mint None): the 30-day
+    kill clock anchors to days_since_first_seed (first summon / game
+    launch) so it can still fire; stays None only with no mint AND no
+    seed at all."""
+    data = _exec_health(
+        _FakeMemory(days_since_last_mint=None, days_since_first_seed=12)
+    )
+    assert data["kill_condition"] == {
+        "days_mint_zero": 12,
+        "share_rate": None,
+        "triggered": False,
+    }
+    data = _exec_health(
+        _FakeMemory(days_since_last_mint=None, days_since_first_seed=31)
+    )
+    assert data["kill_condition"] == {
+        "days_mint_zero": 31,
+        "share_rate": None,
+        "triggered": True,
+    }
+
+
+def test_health_share_rate_computed():
+    """share_rate = lifetime share-per-summon funnel (share_count /
+    seed_count); None when there are no summoners (seed_count == 0)."""
+    data = _exec_health(
+        _FakeMemory(days_since_last_mint=None, share_count=3, seed_count=21)
+    )
+    assert data["share_count"] == 3
+    assert data["seed_count"] == 21
+    assert data["kill_condition"]["share_rate"] == 3 / 21
+    assert data["kill_condition"]["days_mint_zero"] is None
+    assert data["kill_condition"]["triggered"] is False
+    # No summoners at all -> no funnel rate (and no kill clock).
+    data = _exec_health(_FakeMemory())
+    assert data["kill_condition"]["share_rate"] is None
