@@ -202,7 +202,7 @@ def geo_ok_from_map_url(srcs):
 def m7_check(page):
     """M7: mint-loop evidence (per round, presence-only).
 
-    The creature-card MINT area ('⚡ MINT · N sats' + '⚡ Mint via Lightning')
+    The creature-card MINT area ('⚡ MINT · N Stars' + '⚡ Mint via Lightning')
     renders only on a FRESH summon where price_sats > 0 AND can_mint
     (Bayesian max posterior > 0.5, computed only on a fresh summon). All 12
     THOUGHTS are already seeded on prod, so every round here hits the dedup
@@ -307,7 +307,7 @@ def parse_invoice_status(body):
 def mint_ui_state_from_body(body):
     """Classify the creature-card MINT area from body text.
 
-    'mint visible' -> '⚡ MINT · N sats' rendered (price_sats > 0 AND
+    'mint visible' -> '⚡ MINT · N Stars' rendered (price_sats > 0 AND
         can_mint — fresh-summon path only);
     'locked · train more' -> creature present but can_mint=False (dedup
         path: _present_existing_creature sets price_sats from the seed but
@@ -487,7 +487,7 @@ def run_m7_mint_probe(browser, thought, candidate_label="probe"):
     matches -> a REAL fresh summon happens where can_mint (Bayesian max
     posterior > 0.5, computed from the GLOBAL belief prior load_belief()
     player_id='default', data/beliefs.jsonl) is actually evaluated. The
-    MINT area ('⚡ MINT · N sats' + '⚡ Mint via Lightning') renders only
+    MINT area ('⚡ MINT · N Stars' + '⚡ Mint via Lightning') renders only
     when price_sats > 0 AND can_mint, and only on the Care tab. We click
     '⚡ Mint via Lightning' EXACTLY ONCE when it is visible — invoice
     creation ONLY: mint_lightning() (terramon_tma.py) creates an Alby Hub
@@ -501,7 +501,7 @@ def run_m7_mint_probe(browser, thought, candidate_label="probe"):
     global M6_SHARE_PROBE_DONE
     m7_probe = {"probe_thought": thought, "probe_seed_created": False,
                 "mint_button_presence": False, "mint_ui_state": None,
-                "mint_price_sats": None,
+                "mint_price_sats": None, "lightning_price_sats": None,
                 "mint_clicked": False, "invoice_ok": None, "invoice_msg": None,
                 "auto_verify_seen": False, "auto_verify_marker": None,
                 "alby_configured": None}
@@ -546,7 +546,7 @@ def run_m7_mint_probe(browser, thought, candidate_label="probe"):
         probe_page.wait_for_timeout(2500)
         if "A new presence stirs" in probe_body:
             m7_probe["probe_seed_created"] = True
-        # The creature-card MINT area ('⚡ MINT · N sats' + '⚡ Mint via
+        # The creature-card MINT area ('⚡ MINT · N Stars' + '⚡ Mint via
         # Lightning') renders ONLY when the bottom-nav Care tab is active
         # (active_tab == 'care'); right after a fresh summon the app is on
         # the Terra tab, so click the Care tab FIRST — otherwise the body
@@ -559,18 +559,30 @@ def run_m7_mint_probe(browser, thought, candidate_label="probe"):
         except Exception as e:
             print(f"   [m7-probe:{candidate_label}] Care tab click failed (not fatal): {str(e)[:120]}")
         # MINT-area evidence on the fresh-summon card: presence-only check
-        # of the REAL mint loop ('⚡ MINT · N sats' renders only when
+        # of the REAL mint loop ('⚡ MINT · N Stars' renders only when
         # price_sats > 0 AND can_mint, computed on a fresh summon). Re-read
         # the body (the card may finish rendering after wait_result).
         mint_body = probe_page.locator("body").inner_text()
         m7_probe["mint_button_presence"] = "⚡ MINT ·" in mint_body
         m7_probe["mint_ui_state"] = mint_ui_state_from_body(mint_body)
-        # Mint price: the live app renders the button label '⚡ MINT · N sats'
+        # Mint price: the live app renders the button label '⚡ MINT · N Stars'
         # (terramon_tma.py mint area) — parse N when the MINT area is visible
-        # (price_sats > 0 AND can_mint); None when not found.
-        mint_price_match = re.search(r"⚡\s*MINT\s*·\s*(\d+)\s*sats", mint_body)
+        # (price_sats > 0 AND can_mint); None when not found. Honest note: the
+        # unit on the '⚡ MINT ·' button is STARS (Telegram Stars rail), NOT
+        # sats — the field name mint_price_sats is kept for back-compat with
+        # the NSS-EVIDENCE schema, but the value is the Stars price.
+        mint_price_match = re.search(r"⚡\s*MINT\s*·\s*(\d+)\s*Stars?", mint_body, re.IGNORECASE)
         m7_probe["mint_price_sats"] = int(mint_price_match.group(1)) if mint_price_match else None
-        print(f"   [m7-probe:{candidate_label}] MINT area: presence={m7_probe['mint_button_presence']}, ui_state={m7_probe['mint_ui_state']}, mint_price_sats={m7_probe['mint_price_sats']}")
+        # Lightning-button price: the '⚡ Mint via Lightning' button label now
+        # also carries the REAL invoice price ('⚡ Mint via Lightning · N sats',
+        # floor 3000 per LIGHTNING_MIN_MINT_SATS) — the price the user
+        # actually sees and pays on the button. Parsed only when the MINT area
+        # is live (the Lightning button renders only on that path); None
+        # otherwise.
+        if m7_probe["mint_button_presence"]:
+            lightning_price_match = re.search(r"⚡ Mint via Lightning · (\d+) sats", mint_body)
+            m7_probe["lightning_price_sats"] = int(lightning_price_match.group(1)) if lightning_price_match else None
+        print(f"   [m7-probe:{candidate_label}] MINT area: presence={m7_probe['mint_button_presence']}, ui_state={m7_probe['mint_ui_state']}, mint_price_sats={m7_probe['mint_price_sats']} (STARS), lightning_price_sats={m7_probe['lightning_price_sats']} (sats)")
         # M6: share probe on the GUARANTEED fresh summon (post-loop path).
         # The in-loop share probe (gated on has_summoned) never fires when
         # all 12 archetypes are already seeded on prod — so run the share
@@ -852,7 +864,7 @@ with sync_playwright() as p:
                 print(f"   -> main-card (Care tab) re-check failed (not fatal): {str(e)[:120]}")
 
             # M7 (authoritative, Care tab): the creature-card MINT area
-            # ('⚡ MINT · N sats' + '⚡ Mint via Lightning') renders only when
+            # ('⚡ MINT · N Stars' + '⚡ Mint via Lightning') renders only when
             # the bottom-nav Care tab is active (active_tab == 'care'), and
             # the Care re-check above has just clicked it — so the per-round
             # NSS mint evidence is computed HERE on the Care-tab body read,
@@ -981,7 +993,7 @@ with sync_playwright() as p:
         m7_probe = m7_probe_attempts[-1] if m7_probe_attempts else {
             "probe_thought": None, "probe_seed_created": False,
             "mint_button_presence": False, "mint_ui_state": None,
-            "mint_price_sats": None,
+            "mint_price_sats": None, "lightning_price_sats": None,
             "mint_clicked": False, "invoice_ok": None, "invoice_msg": None,
             "auto_verify_seen": False, "auto_verify_marker": None,
             "alby_configured": None}
@@ -998,7 +1010,7 @@ with sync_playwright() as p:
     print(f"geo_ok_rounds: {geo_ok_rounds}  (geo_ok_rounds now counts map-URL coords OR body-text coords; body coords = place contains coords != '0.00, 0.00')")
     print(f"distinct_archetypes: {len(collected)} -> {sorted(collected.keys())}")
     print(f"oye_buttons_total: {oye_total}")
-    print(f"mint_button_presence: {mint_presence}  (round -> '⚡ MINT · N sats' visible on the creature card; per-round evidence comes from the Care-tab read (rlog['m7_care']) — the MINT area renders only when the Care tab is active; never clicked — presence-only policy)")
+    print(f"mint_button_presence: {mint_presence}  (round -> '⚡ MINT · N Stars' visible on the creature card; per-round evidence comes from the Care-tab read (rlog['m7_care']) — the MINT area renders only when the Care tab is active; never clicked — presence-only policy)")
     print(f"mint_ui_state: {mint_ui_state_rounds}  (creature-card MINT area per round, from the Care-tab read (rlog['m7_care']): 'mint visible' / 'locked · train more' / 'free summon' / 'unknown')")
     print(f"invoice_ok: {invoice_ok_rounds if invoice_ok_rounds else 'no invoice message observed (MINT area not live or no agent_message)'}  (post-loop probe: first candidate with a live fresh-summon MINT area — ONE '⚡ Mint via Lightning' invoice-creation click, creates an Alby Hub invoice only, NO mint record, NO payment; markers parsed from the agent_message)")
     m7_round1_probe = next((r.get("m7_round1_probe") for r in round_log if r.get("m7_round1_probe") is not None), None)
@@ -1007,7 +1019,8 @@ with sync_playwright() as p:
     print(f"m7_probe_attempts: {json.dumps(m7_probe_attempts, ensure_ascii=False)}  (candidate attempts in order Lover -> Magician -> Caregiver, stopped at the first with a live MINT area; each attempt used its own run-unique timestamped English thought in a fresh context)")
     print(f"auto_verify_seen: {m7_probe.get('auto_verify_seen')}  (post-loop mint probe, ~7s after the single '⚡ Mint via Lightning' invoice-creation click: '⏳ Auto-checking payment… N/30' visible in the invoice panel = the hidden rx.moment poller (6s tick, LIGHTNING_VERIFY_INTERVAL_MS) is ARMED on the live prod deploy; False = iter-17 auto-verify absent on this deploy or the poll already gave up — recorded honestly, absence is never a pass)")
     print(f"auto_verify_marker: {m7_probe.get('auto_verify_marker')}  (the matched invoice-panel body line, e.g. '⏳ Auto-checking payment… 1/30', or None)")
-    print(f"mint_price_sats: {m7_probe.get('mint_price_sats')}  (post-loop mint probe, fresh-summon creature card: Lightning mint price parsed from the '⚡ MINT · N sats' button label; None when the MINT area is not live — the price renders only when price_sats > 0 AND can_mint, and has a 3000-sat floor per LIGHTNING_MIN_MINT_SATS)")
+    print(f"mint_price_sats: {m7_probe.get('mint_price_sats')}  (post-loop mint probe, fresh-summon creature card: price parsed from the '⚡ MINT · N Stars' button label — the unit is STARS (Telegram Stars rail), NOT sats; the field name mint_price_sats is kept for back-compat with the NSS-EVIDENCE schema; None when the MINT area is not live — the price renders only when price_sats > 0 AND can_mint)")
+    print(f"lightning_price_sats: {m7_probe.get('lightning_price_sats')}  (post-loop mint probe: the REAL Lightning-invoice price shown on the '⚡ Mint via Lightning · N sats' button label — the exact price the user sees and pays, floor 3000 per LIGHTNING_MIN_MINT_SATS; parsed from the button label when the MINT area is live; None otherwise)")
     print(f"place_name_rounds: {json.dumps([r.get('m2_after_care', {}).get('place_name_after_care') for r in round_log], ensure_ascii=False)}  (M1 geo evidence: human place name from the creature card's 📍 line — the UI shows 'Kraków, Polska' style names, not raw coords; None when the card shows no place name)")
     m6_share_probe = next((r.get("m6_share_probe") for r in round_log if r.get("m6_share_probe") is not None), None)
     print(f"m6_share_probe (round 1): {json.dumps(m6_share_probe, ensure_ascii=False) if m6_share_probe else 'not probed (no round produced a fresh summon — has_summoned never True)'}  (server-side /health share_count delta; share_creature records BEFORE the clipboard write, so clipboard errors are non-fatal)")

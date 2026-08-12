@@ -81,6 +81,50 @@ _INDEX_RARITY = "CREATE INDEX IF NOT EXISTS idx_seeds_rarity ON seeds(rarity)"
 _INDEX_TS = "CREATE INDEX IF NOT EXISTS idx_seeds_timestamp ON seeds(timestamp)"
 
 
+# ---------------------------------------------------------------------------
+# M8 D7-retention: pure cohort helpers (no I/O, no clock — tests inject ``now``).
+# Cohort form from the OSS reference (maladeep/cohort-retention-rate-analysis):
+# eligible / retained / rate. D7 = the first day a player COULD have returned.
+# ---------------------------------------------------------------------------
+
+def _d7_from_records(records: list[PlayerRecord], now: float, days: int = 7) -> dict:
+    """Classic D7 cohort split over PlayerRecord objects (pure function).
+
+    ``eligible`` — players whose first visit happened at least ``days`` days
+    before ``now`` (their D7 has arrived: they COULD have returned);
+    ``retained`` — among them, those seen again on/after first_seen +
+    days*86400 (they DID come back on or after D7); ``retention_rate`` —
+    retained / eligible, 0.0 when nobody is eligible yet. Broken records
+    (non-numeric timestamps) are skipped, never raised.
+    """
+    window = days * 86400
+    cutoff = now - window  # first_seen_at <= cutoff  ⇒  D7 has passed
+    eligible = 0
+    retained = 0
+    for rec in records:
+        try:
+            first = float(rec.first_seen_at)
+            last = float(rec.last_seen_at)
+        except (TypeError, ValueError):
+            continue  # corrupt line — the metric must never crash
+        if first > cutoff:
+            continue  # too young to have reached D7 yet
+        eligible += 1
+        if last >= first + window:
+            retained += 1
+    rate = retained / eligible if eligible > 0 else 0.0
+    return {"eligible": eligible, "retained": retained, "retention_rate": rate}
+
+
+def _days_since(ts: float, now: float) -> int:
+    """Whole days (floor) elapsed between epoch ``ts`` and ``now``.
+
+    Clamped at 0 so a slightly future-dated mint (clock skew) reads as
+    "0 days ago" instead of a negative value.
+    """
+    return int(max(0.0, now - float(ts)) // 86400)
+
+
 class JsonMemory(MemoryPort):
     """Stores thought seeds as newline-delimited JSON records.
 
@@ -311,6 +355,40 @@ class JsonMemory(MemoryPort):
             ):
                 return bool(record.get("minted", False)), str(record.get("minted_at", "") or "")
         return False, ""
+
+    def days_since_last_mint(self) -> int | None:
+        """Whole days (floor) since the most recent mint, or None if none yet.
+
+        M8 KPI: the mint half of the North Star Score needs to know how
+        stale the last mint is. Reads the mint record attached by
+        load_all_seeds (``minted`` bool + ``minted_at`` ISO timestamp),
+        takes the newest minted_at among minted seeds, and floors the age
+        in days. Pure offline read — never touches the network; unparseable
+        or missing timestamps are skipped so a broken line cannot crash
+        the metric. ``None`` means the store has never seen a mint.
+        """
+        import time as _time
+        from datetime import datetime
+
+        newest: float | None = None
+        for seed in self.load_all_seeds():
+            if not getattr(seed, "minted", False):
+                continue
+            raw = getattr(seed, "minted_at", "") or ""
+            if not raw:
+                continue
+            try:
+                ts = datetime.fromisoformat(str(raw)).timestamp()
+            except (ValueError, TypeError, OverflowError):
+                try:
+                    ts = float(raw)  # epoch-seconds fallback for old records
+                except (TypeError, ValueError):
+                    continue
+            if newest is None or ts > newest:
+                newest = ts
+        if newest is None:
+            return None
+        return _days_since(newest, _time.time())
 
     def find_seed(
         self, raw_input: str, summoned_agent: str | None = None
@@ -657,6 +735,17 @@ class JsonMemory(MemoryPort):
             for p in self.load_players()
             if p.session_count > 1 and p.last_seen_at >= cutoff
         )
+
+    def d7_cohort_stats(self, days: int = 7) -> dict:
+        """Classic D7 retention cohort over the player registry (M8 KPI).
+
+        Loads players exactly like count_unique_players and delegates the
+        pure arithmetic to :func:`_d7_from_records` (no I/O, no network).
+        Returns ``{'eligible': int, 'retained': int, 'retention_rate': float}``
+        — ``retention_rate`` is 0.0 while no cohort has reached D7 yet.
+        """
+        import time as _time
+        return _d7_from_records(self.load_players(), _time.time(), days)
 
     # ------------------------------------------------------------------
     # Share registry (shares.jsonl) — M6 share-funnel counter. Append-only

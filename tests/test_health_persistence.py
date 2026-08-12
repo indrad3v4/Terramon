@@ -23,7 +23,10 @@ reading of the source, located by NAME markers — never by line number,
 because the file is edited in parallel and offsets shift.
 """
 
+import json
 import re
+import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -258,4 +261,161 @@ def test_dockerignore_excludes_boot_epoch_marker():
     assert "data/*.jsonl" in text, ".dockerignore lost the 'data/*.jsonl' line"
     assert "!data/.gitkeep" in text, (
         ".dockerignore lost the '!data/.gitkeep' negation"
+    )
+
+
+# ── 9: /health D7 cohort + kill-condition (getattr-degradable) ─────────
+
+
+class _FakeMemory:
+    """Stub JsonMemory for RUNTIME /health tests (no data dir, no I/O).
+
+    ``d7_cohort_stats`` / ``days_since_last_mint`` model the parallel-task
+    methods that may not exist on the real JsonMemory yet — the
+    missing-method test deletes them via monkeypatch to lock the
+    graceful-degradation contract (keys None, kill_condition.triggered
+    False, never a 500).
+    """
+
+    def __init__(self, d7_stats=None, days_since_last_mint=None):
+        self._d7_stats = d7_stats
+        self._days_since_last_mint = days_since_last_mint
+
+    def load_all_seeds(self):
+        return []
+
+    def count_unique_players(self):
+        return 0
+
+    def count_returning_players(self, days=7):
+        return 0
+
+    def count_shares(self):
+        return 0
+
+    def count_shares_since(self, days=7):
+        return 0
+
+    def d7_cohort_stats(self, days=7):
+        return self._d7_stats
+
+    def days_since_last_mint(self):
+        return self._days_since_last_mint
+
+
+def _exec_health(memory) -> dict:
+    """Run the REAL health() source against a stub module namespace.
+
+    The app module is never imported (module-level Reflex app
+    construction); instead the function source is exec'd with a fake
+    module registered in sys.modules so the ``sys.modules.get(__name__)``
+    snapshot-restore lookups resolve. Returns the parsed JSON body.
+    """
+    func_src = "\n".join(
+        _top_level_func_lines(SOURCE.read_text(encoding="utf-8"), "health")
+    )
+    mod_name = "terramon_tma_health_under_test"
+    fake_mod = types.ModuleType(mod_name)
+    fake_mod.DATA_PERSISTED = True
+    fake_mod._SNAPSHOT_RESTORED = False
+    fake_mod._RESTORED_COUNTS = {}
+    fake_mod._SNAPSHOT_TS = ""
+    sys.modules[mod_name] = fake_mod
+    try:
+        namespace = {
+            "__name__": mod_name,
+            "DATA_PERSISTED": True,
+            "_MEMORY": memory,
+            "_ALBY": types.SimpleNamespace(url=None, api_key=None),
+            "sys": sys,
+        }
+        exec(compile(func_src, "<health>", "exec"), namespace)
+        return json.loads(namespace["health"](None).body)
+    finally:
+        sys.modules.pop(mod_name, None)
+
+
+def test_health_reports_d7_kill_condition_keys(source):
+    """health() must surface the D7 cohort fields + kill-condition block
+    with EXACT key names, read via getattr + callable fallback so a
+    JsonMemory without the parallel-task methods degrades to None/False
+    instead of crashing /health."""
+    health = "\n".join(_top_level_func_lines(source, "health"))
+    for key in (
+        '"d7_eligible": (d7_stats or {}).get("eligible")',
+        '"d7_retained": (d7_stats or {}).get("retained")',
+        '"d7_retention": (d7_stats or {}).get("retention_rate")',
+        '"days_since_last_mint": days_since_last_mint',
+        '"kill_condition": {',
+        '"days_mint_zero": days_since_last_mint',
+        '"share_rate": None',
+        '"triggered": bool(',
+    ):
+        assert key in health, f"health() JSON missing {key!r}"
+    # getattr fallback wiring for both parallel-task methods, plus the
+    # degraded defaults (inner try/except AND the outer except branch).
+    assert 'getattr(_MEMORY, "d7_cohort_stats", None)' in health
+    assert 'getattr(_MEMORY, "days_since_last_mint", None)' in health
+    assert health.count("d7_stats = None") >= 2
+    assert "days_since_last_mint = None" in health
+
+
+def test_health_d7_stats_flow():
+    """/health happy path: d7_eligible/retained/retention come from
+    _MEMORY.d7_cohort_stats(days=7); days_since_last_mint from
+    _MEMORY.days_since_last_mint(); kill_condition NOT triggered < 30."""
+    mem = _FakeMemory(
+        d7_stats={"eligible": 12, "retained": 5, "retention_rate": 0.4167},
+        days_since_last_mint=4,
+    )
+    data = _exec_health(mem)
+    assert data["status"] == "ok"
+    assert data["d7_eligible"] == 12
+    assert data["d7_retained"] == 5
+    assert data["d7_retention"] == 0.4167
+    assert data["days_since_last_mint"] == 4
+    assert data["kill_condition"] == {
+        "days_mint_zero": 4,
+        "share_rate": None,
+        "triggered": False,
+    }
+
+
+def test_health_d7_missing_methods_degrade(monkeypatch):
+    """JsonMemory WITHOUT d7_cohort_stats/days_since_last_mint (parallel
+    task not landed yet): /health must still return ok — D7 keys read None
+    and kill_condition.triggered is False, never a 500."""
+    mem = _FakeMemory()
+    monkeypatch.delattr(_FakeMemory, "d7_cohort_stats")
+    monkeypatch.delattr(_FakeMemory, "days_since_last_mint")
+    data = _exec_health(mem)
+    assert data["status"] == "ok"
+    assert data["d7_eligible"] is None
+    assert data["d7_retained"] is None
+    assert data["d7_retention"] is None
+    assert data["days_since_last_mint"] is None
+    assert data["kill_condition"] == {
+        "days_mint_zero": None,
+        "share_rate": None,
+        "triggered": False,
+    }
+
+
+def test_health_kill_condition_triggered_at_30_days():
+    """The kill-condition fires exactly when days_since_last_mint >= 30."""
+    assert (
+        _exec_health(_FakeMemory(days_since_last_mint=30))["kill_condition"]["triggered"]
+        is True
+    )
+    assert (
+        _exec_health(_FakeMemory(days_since_last_mint=31))["kill_condition"]["triggered"]
+        is True
+    )
+    assert (
+        _exec_health(_FakeMemory(days_since_last_mint=29))["kill_condition"]["triggered"]
+        is False
+    )
+    assert (
+        _exec_health(_FakeMemory(days_since_last_mint=0))["kill_condition"]["triggered"]
+        is False
     )

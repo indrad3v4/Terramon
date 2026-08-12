@@ -425,6 +425,7 @@ class TerramonState(rx.State):
     lightning_checking: bool = False  # in-flight verify flag
     lightning_auto_verify: bool = False  # auto-poll Alby settle after invoice creation
     lightning_verify_attempts: int = 0   # bounded auto-poll tick counter
+    invoice_copied: bool = False  # BOLT11 copy feedback flag (reset on every new invoice)
 
     # M7 — Mint loop (closed): a real mint record on the seed + a counter
     # for analytics. Stars = optimistic mint on click (openInvoice has no
@@ -616,6 +617,18 @@ class TerramonState(rx.State):
         if self.level < 10:
             return f"{10 - self.level} more levels to evolve"
         return "Keep interacting to grow"
+
+    @rx.var
+    def lightning_button_label(self) -> str:
+        """Honest Lightning mint price on the '⚡ Mint via Lightning' button.
+
+        lightning_mint_price lifts the Stars-typed price_sats to at least
+        LIGHTNING_MIN_MINT_SATS (the Alby Hub JIT floor) — the button shows
+        the REAL invoiced sats, not the Stars price. The '⚡ Mint via
+        Lightning' prefix is load-bearing: the KPI probe's has-text selector
+        keys on it, so it must stay at the START of the label.
+        """
+        return f"⚡ Mint via Lightning · {lightning_mint_price(self.price_sats)} sats"
 
     @rx.event
     def set_thought(self, value: str):
@@ -1791,6 +1804,7 @@ class TerramonState(rx.State):
         try:
             req = _ALBY.create_payment(price, f"Terramon mint · {self.agent}")
             self.lightning_invoice = req.destination
+            self.invoice_copied = False  # fresh invoice → clear copy feedback
             try:
                 self.lightning_qr = _qr_data_uri(req.destination)
             except Exception:
@@ -1910,6 +1924,7 @@ class TerramonState(rx.State):
         try:
             req = _ALBY.create_payment(price, f"Terramon summon · {self.thought[:40]}")
             self.lightning_invoice = req.destination
+            self.invoice_copied = False  # fresh invoice → clear copy feedback
             try:
                 self.lightning_qr = _qr_data_uri(req.destination)
             except Exception:
@@ -1924,6 +1939,13 @@ class TerramonState(rx.State):
         except Exception as e:
             log.error(f"pay_lightning failed: {e}", exc_info=True)
             self.agent_message = f"⚡ Invoice failed: {getattr(e, 'message', e)}"
+
+    @rx.event
+    def mark_invoice_copied(self):
+        """BOLT11 copy feedback flag — flips invoice_copied so the panel can
+        show '✓ Инвойс скопирован'. Deliberately does NOT touch agent_message:
+        the KPI probe parses the '⚡ Invoice ready' marker from it."""
+        self.invoice_copied = True
 
     @rx.event
     def verify_lightning(self, _tick=None):
@@ -2668,7 +2690,7 @@ def creature_care_panel() -> rx.Component:
                         rx.vstack(
                             rx.tooltip(
                                 rx.button(
-                                    "⚡ MINT · " + TerramonState.price_sats.to_string() + " sats",
+                                    "⚡ MINT · " + TerramonState.price_sats.to_string() + " Stars",
                                     on_click=TerramonState.mint_creature,
                                     background=TerramonState.color,
                                     color="#0b0b0f",
@@ -2678,8 +2700,9 @@ def creature_care_panel() -> rx.Component:
                                 ),
                                 content="Mint this creature to Telegram Stars — tradable collectible on-chain",
                             ),
+                            # '⚡ Mint via Lightning' — honest sats price via lightning_button_label
                             rx.button(
-                                "⚡ Mint via Lightning",
+                                TerramonState.lightning_button_label,
                                 on_click=TerramonState.mint_lightning,
                                 variant="surface",
                                 size="1",
@@ -3415,6 +3438,20 @@ def _lightning_invoice_panel() -> rx.Component:
                 font_size="0.55em", color="#6b7280", text_align="center",
                 max_width="280px", word_break="break-all",
             ),
+            # BOLT11 copy affordance — same rx.set_clipboard pattern as
+            # share_creature; mark_invoice_copied only flips the feedback
+            # flag (never touches agent_message — KPI parses it).
+            rx.button(
+                "📋 Copy BOLT11",
+                on_click=[rx.set_clipboard(TerramonState.lightning_invoice), TerramonState.mark_invoice_copied],
+                variant="surface", size="1", color_scheme="gray",
+                width="100%",
+            ),
+            rx.cond(
+                TerramonState.invoice_copied,
+                rx.text("✓ Инвойс скопирован", font_size="0.6em", color="#4ade80"),
+                rx.fragment(),
+            ),
             rx.cond(
                 TerramonState.lightning_auto_verify,
                 rx.text("⏳ Auto-checking payment… " + TerramonState.lightning_verify_attempts.to_string() + "/30", font_size="0.7em", color="#9ca3af"),
@@ -3919,7 +3956,7 @@ def index() -> rx.Component:
                                         rx.vstack(
                                             rx.tooltip(
                                                 rx.button(
-                                                    "⚡ MINT · " + TerramonState.price_sats.to_string() + " sats",
+                                                    "⚡ MINT · " + TerramonState.price_sats.to_string() + " Stars",
                                                     on_click=TerramonState.mint_creature,
                                                     background=TerramonState.color,
                                                     color="#0b0b0f",
@@ -3930,8 +3967,9 @@ def index() -> rx.Component:
                                                 ),
                                                 content="Mint this creature to Telegram Stars — tradable collectible on-chain",
                                             ),
+                                            # '⚡ Mint via Lightning' — honest sats price via lightning_button_label
                                             rx.button(
-                                                "⚡ Mint via Lightning",
+                                                TerramonState.lightning_button_label,
                                                 on_click=TerramonState.mint_lightning,
                                                 variant="surface",
                                                 size="1",
@@ -4300,6 +4338,17 @@ def health(request):
         # M6 share counter: persisted share registry (JsonMemory).
         share_count = _MEMORY.count_shares()
         shares_7d = _MEMORY.count_shares_since(days=7)
+        # D7 cohort + kill-condition: d7_cohort_stats() / days_since_last_mint()
+        # land in JsonMemory via a parallel task — degrade gracefully to
+        # None/False while they are absent (getattr + callable fallback).
+        try:
+            _d7 = getattr(_MEMORY, "d7_cohort_stats", None)
+            d7_stats = _d7(days=7) if callable(_d7) else None
+            _dslm = getattr(_MEMORY, "days_since_last_mint", None)
+            days_since_last_mint = _dslm() if callable(_dslm) else None
+        except Exception:
+            d7_stats = None
+            days_since_last_mint = None
         # Alby Hub adapter config presence (url + api_key both set).
         alby_configured = bool(
             getattr(_ALBY, "url", None) and getattr(_ALBY, "api_key", None)
@@ -4336,6 +4385,8 @@ def health(request):
         share_count = 0
         shares_7d = 0
         alby_configured = False
+        d7_stats = None
+        days_since_last_mint = None
         # Degraded path: derived counters are 0, but the restored baseline
         # (if any) still surfaces so evidence survives even here.
         _restored_mint = 0
@@ -4358,7 +4409,7 @@ def health(request):
         share_count = _restored_share
     return JSONResponse({
         "status": "ok",
-        "tests": 466,  # pytest count, synced at portrait-fix (Lesson 13, +8 portrait_serve tests)
+        "tests": 496,  # pytest count, synced at iter-22 (mint-ux labels + D7 cohort + KPI parser)
         "data_persisted": data_persisted,
         "data_restored_from_snapshot": bool(
             getattr(sys.modules.get(__name__), "_SNAPSHOT_RESTORED", False)
@@ -4373,6 +4424,17 @@ def health(request):
         "returning_players_7d": returning_players_7d,
         "share_count": share_count,
         "shares_7d": shares_7d,
+        "d7_eligible": (d7_stats or {}).get("eligible"),
+        "d7_retained": (d7_stats or {}).get("retained"),
+        "d7_retention": (d7_stats or {}).get("retention_rate"),
+        "days_since_last_mint": days_since_last_mint,
+        "kill_condition": {
+            "days_mint_zero": days_since_last_mint,
+            "share_rate": None,
+            "triggered": bool(
+                days_since_last_mint is not None and days_since_last_mint >= 30
+            ),
+        },
         "alby_configured": alby_configured,
     })
 
