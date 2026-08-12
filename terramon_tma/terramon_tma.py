@@ -4346,6 +4346,17 @@ def health(request):
         # volume actually attached); False when it was wiped on redeploy.
         data_persisted = DATA_PERSISTED
         seed_count = len(_MEMORY.load_all_seeds())
+        # Depth win (Lens #97, prism roast 2026-08-13): complete releases —
+        # seeds released WITH final words AND a real geo anchor. The KPI
+        # loop scores win-path on this (1 complete release = 100%), not on
+        # archetype breadth.
+        complete_releases = sum(
+            1 for s in _MEMORY.load_all_seeds()
+            if getattr(s, "status", "") == "released"
+            and (getattr(s, "final_words", "") or "").strip()
+            and getattr(s, "lat", None) not in (None, 0)
+            and getattr(s, "lon", None) not in (None, 0)
+        )
         mint_count = sum(
             1 for s in _MEMORY.load_all_seeds() if getattr(s, "minted", False)
         )
@@ -4403,6 +4414,7 @@ def health(request):
         data_persisted = False
         mint_count = 0
         seed_count = 0
+        complete_releases = 0
         player_count = 0
         returning_players_7d = 0
         share_count = 0
@@ -4443,7 +4455,7 @@ def health(request):
     share_rate = (share_count / seed_count) if seed_count > 0 else None
     return JSONResponse({
         "status": "ok",
-        "tests": 502,  # pytest count, synced at iter-23 (kill-condition clock anchor + share_rate)
+        "tests": 519,  # pytest count, synced at depth-win (Lens #97: +7 durability_boot +10 depth_win)
         "data_persisted": data_persisted,
         "data_restored_from_snapshot": bool(
             getattr(sys.modules.get(__name__), "_SNAPSHOT_RESTORED", False)
@@ -4454,6 +4466,7 @@ def health(request):
         "snapshot_ts": getattr(sys.modules.get(__name__), "_SNAPSHOT_TS", "") or "",
         "mint_count": mint_count,
         "seed_count": seed_count,
+        "complete_releases": complete_releases,
         "player_count": player_count,
         "returning_players_7d": returning_players_7d,
         "share_count": share_count,
