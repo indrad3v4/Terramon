@@ -25,6 +25,13 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # Now copy the full source
 COPY . .
 
+# Bake the ship-time durability snapshot OUTSIDE the volume path: the
+# Railway volume mounts at /app/data and shadows the image-baked
+# data/snapshots on the first boot with an empty volume, so
+# restore_counters_if_wiped had no baseline (restored=False). This copy
+# survives shadowing and gives the restore a real baseline.
+COPY data/snapshots /app/boot_snapshots
+
 # Force full frontend recompile — delete any cached .web from prior builds
 RUN rm -rf .web
 

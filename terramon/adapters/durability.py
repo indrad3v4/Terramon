@@ -41,6 +41,14 @@ from pathlib import Path
 log = logging.getLogger("terramon.durability")
 
 SNAPSHOT_DIR = Path(os.environ.get("TERRAMON_DATA_DIR", "data")) / "snapshots" / "latest"
+# Boot-baked fallback: the Railway volume mounts AT /app/data, shadowing the
+# image-baked data/snapshots on the first boot with a fresh (empty) volume —
+# so restore_counters_if_wiped found nothing and reported restored=False.
+# The Dockerfile copies data/snapshots to /app/boot_snapshots (outside the
+# volume) so a wiped boot still has a ship-time baseline to replay.
+BOOT_SNAPSHOT_DIR = Path(
+    os.environ.get("TERRAMON_BOOT_SNAPSHOT_DIR", "/app/boot_snapshots/latest")
+)
 SNAPSHOT_FILENAME = "health.json"
 # The only counters the app replays additively into /health (spec: the
 # restore is a baseline for mint/share/seed evidence; player cohorts are
@@ -83,20 +91,41 @@ def capture_health_snapshot(counts: dict, snapshot_dir: str | Path | None = None
         return None
 
 
+def _snapshot_candidates(snapshot_dir: str | Path | None):
+    """Primary snapshot dir, then the boot-baked dir (volume-shadow safe).
+
+    The primary dir is where the app writes snapshots (data/snapshots, on
+    the Railway volume once attached). The boot dir is baked into the image
+    at /app/boot_snapshots — it survives the volume shadowing /app/data on
+    the first boot after a wipe, giving the restore a real baseline.
+    """
+    primary = _resolve_dir(snapshot_dir)
+    yield primary
+    if str(primary.resolve()) != str(BOOT_SNAPSHOT_DIR.resolve()):
+        yield BOOT_SNAPSHOT_DIR
+
+
 def read_snapshot(snapshot_dir: str | Path | None = None) -> dict | None:
-    """Read the latest snapshot dict; None on missing/corrupt. NEVER raises."""
-    out_dir = _resolve_dir(snapshot_dir)
-    try:
-        path = out_dir / SNAPSHOT_FILENAME
-        if not path.is_file():
-            return None
-        data = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(data, dict):
-            return None
-        return data
-    except Exception as exc:
-        log.warning("durability: snapshot %s unreadable: %s", out_dir, exc)
-        return None
+    """Read the latest snapshot dict; None on missing/corrupt. NEVER raises.
+
+    Tries the primary dir first (volume-persisted snapshots), then the
+    boot-baked /app/boot_snapshots dir. This is the shape-contract fix
+    (Lesson 14): the restore pipeline expected the snapshot at data/… but
+    a fresh volume changed the filesystem shape — the fallback re-matches
+    the contract.
+    """
+    for out_dir in _snapshot_candidates(snapshot_dir):
+        try:
+            path = out_dir / SNAPSHOT_FILENAME
+            if not path.is_file():
+                continue
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                continue
+            return data
+        except Exception as exc:
+            log.warning("durability: snapshot %s unreadable: %s", out_dir, exc)
+    return None
 
 
 def _extract_counter_counts(snapshot: dict) -> dict:
