@@ -348,7 +348,7 @@ def _fal_request(
                 _FAL_API_URL,
                 data=json.dumps({
                     "prompt": prompt,
-                    "image_size": "square_hd" if "square" else "square",
+                    "image_size": "square_hd",
                     "num_images": 1,
                     "seed": seed,
                 }).encode(),

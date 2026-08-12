@@ -77,8 +77,11 @@ RUN mkdir -p /app/data /app/.web/backend /app/.local/share/reflex /app/reflex.lo
     touch /app/.web/backend/stateful_pages.json && \
     chown -R terramon:terramon /app/data /app/.web/backend/stateful_pages.json /app/.web /app/.local/share/reflex /app/reflex.lock
 
-# Switch to non-root user
-USER terramon
+# Container starts as root so startup.sh can fix Railway volume ownership
+# (volumes mount root-owned at container start; a non-root user cannot
+# chmod/chown them — that was the crash loop). startup.sh drops privileges
+# back to terramon before exec'ing the app.
+USER root
 
 # Railway provides $PORT. Reflex serves frontend + backend together in prod.
 ENV PORT=8080
@@ -93,12 +96,16 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
 # Run cleanup of old portrait files on startup (30-day retention).
 # Phase 17: prevents unbounded disk growth from generated images.
 RUN echo '#!/bin/sh\n\
-echo "[startup] Ensuring /app/data writable (Railway volume)"\n\
+\necho "[startup] Ensuring /app/data writable (Railway volume)"\n\
 chmod -R 777 /app/data 2>/dev/null || true\n\
+chown -R terramon:terramon /app/data 2>/dev/null || true\n\
 find /app/data/creatures -name "*.png" -type f -mtime +30 -delete 2>/dev/null || true\n\
 find /app/data/creatures/thumbnails -name "*.png" -type f -mtime +30 -delete 2>/dev/null || true\n\
 find /app/data/creatures/placeholders -name "*.png" -type f -mtime +30 -delete 2>/dev/null || true\n\
-echo "[startup] Cleaned portraits older than 30 days"\n\
+\necho "[startup] Cleaned portraits older than 30 days"\n\
+if [ "$(id -u)" = "0" ]; then\n\
+  exec setpriv --reuid=terramon --regid=terramon --init-groups "$@" 2>/dev/null || exec su terramon -s /bin/sh -c "$*"\n\
+fi\n\
 exec "$@"' > /app/startup.sh && chmod +x /app/startup.sh
 
 # Run both frontend (static, on $PORT) and backend (API/websocket).
