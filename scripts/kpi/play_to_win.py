@@ -10,6 +10,14 @@ except ImportError:  # run as plain script: python scripts/kpi/play_to_win.py
 # injected resilient window.Telegram.WebApp mock (headless Chromium has no
 # Telegram runtime). --tma-studio / TMA_STUDIO_URL attempts the TMA-Studio
 # web demo first and falls back to the mock honestly (see probe below).
+# Depth-win release probe (Lens #97 reframe): after the mint probes,
+# run_depth_release_probe() performs ONE full release ritual on prod —
+# fresh player -> summon run-unique English thought -> Care tab ->
+# 2x '✦ EVOLVE' (stage 2) -> '💨 Отпустить' dialog with final words +
+# real geo — proving the depth win-path is reachable. Honest note: the
+# probe creates exactly ONE real released seed (status='released' +
+# final_words + lat/lon) on prod per run; /health complete_releases is
+# the authoritative 0->1 signal (1 complete release = 100% of the win).
 AP = argparse.ArgumentParser(description="Terramon KPI Playwright player (TMA-aware)")
 AP.add_argument("--tma-studio", action="store_true",
                 help="attempt TMA-Studio web demo (?appUrl=) first; falls back to the injected mock")
@@ -685,6 +693,173 @@ def run_m7_mint_probe(browser, thought, candidate_label="probe"):
                 pass
     return m7_probe
 
+def run_depth_release_probe(browser, candidate_label="depth-release"):
+    """Depth-win release probe: prove the FULL release ritual is reachable
+    on prod (Lens #97 reframe — the win is DEPTH: ONE complete release
+    with final words at a real place = 100%, not archetype breadth).
+
+    Fresh context + fresh player identity (user_id=709999998) -> summon a
+    run-unique ENGLISH thought (probe_thought, Lover base — same dedup
+    reasoning as the mint probe) -> Care tab -> click '✦ EVOLVE' TWICE
+    (evolve_agent has NO probability gate, cap 2) so agent_evolution
+    reaches stage 2 -> click '💨 Отпустить' .first (the care-panel
+    show_release button; the dialog confirm carries the SAME label, so
+    after the dialog opens we fill the textarea and click .last = the
+    dialog confirm) with final words 'Прощай, страх. Свободен.' + real
+    geo (capture_location '⟳' BEFORE summon, same as the rounds).
+
+    The authoritative signal is the /health complete_releases delta
+    (0 -> 1): release_creature() persists status='released' + final_words
+    via _MEMORY.update_seed, and the progress counter increments only
+    when final words are non-empty AND lat/lon != 0 (record_complete_
+    release). UI receipt markers ('✓ Отпущено:' / the quoted final words
+    / 'отпустил свою мысль' in the body after confirm) are secondary
+    evidence. KPI policy: NEVER clicks any mint button (Contract 3) —
+    this probe touches only the care/release path. Honest note: creates
+    exactly ONE real released seed on prod per run.
+    """
+    depth_probe = {"probe_thought": None, "released_clicked": False,
+                   "words_entered": False, "receipt_seen": False,
+                   "receipt_snippet": None, "complete_before": None,
+                   "complete_after": None, "complete_delta": None,
+                   "error": None}
+    probe_ctx = None
+    try:
+        depth_probe["complete_before"] = fetch_health_full().get(
+            "complete_releases")
+        thought = probe_thought()  # Lover base, run-unique timestamp
+        depth_probe["probe_thought"] = thought
+        probe_ctx = browser.new_context(
+            viewport={"width": 414, "height": 896})
+        setup_geo(probe_ctx)
+        probe_page = probe_ctx.new_page()
+        # TMA env: same injected-mock pattern as the rounds (distinct
+        # player identity so the probe player starts with summon_count=0).
+        tma_setup = tma_env.setup_tma_env(
+            probe_page,
+            user_id=709999998,
+            first_name="KPIReleaseProbe",
+            username="kpi_release_probe",
+            auto_location=(GEO_LAT, GEO_LON),
+        )
+        print(f"[depth-probe:{candidate_label}] TMA env: "
+              f"{json.dumps(tma_setup, ensure_ascii=False)}")
+        probe_page.goto(URL, timeout=60000)
+        probe_page.wait_for_timeout(6000)
+        gotit = probe_page.locator("button:has-text('Got it!')").first
+        if gotit.count() > 0 and gotit.is_visible():
+            gotit.click(timeout=5000)
+            probe_page.wait_for_timeout(1500)
+        # M1: press '⟳' BEFORE typing the thought (same as the rounds)
+        capture_location(probe_page)
+        inp = probe_page.locator("input").first
+        inp.wait_for(state="visible", timeout=30000)
+        inp.fill(thought)
+        probe_page.wait_for_timeout(400)
+        for kw in ['Got it!', 'Continue', '✦ Continue', 'ok', 'close']:
+            try:
+                b = probe_page.get_by_role(
+                    "button", name=kw, exact=False).first
+                if b.count() > 0 and b.is_visible():
+                    b.click(timeout=1200)
+                    probe_page.wait_for_timeout(300)
+            except Exception:
+                pass
+        probe_page.locator("button:has-text('SUMMON')").first.click(
+            timeout=15000)
+        print(f"[depth-probe:{candidate_label}] probe_thought={thought!r} "
+              "clicked SUMMON, waiting...")
+        wait_result(probe_page)
+        probe_page.wait_for_timeout(2500)
+        # The release ritual lives on the Care tab (same as the MINT area)
+        care_tab = probe_page.locator("button:has-text('Care')").first
+        if care_tab.count() > 0 and care_tab.is_visible():
+            care_tab.click(timeout=4000)
+            probe_page.wait_for_timeout(1500)
+        # '✦ EVOLVE' TWICE (evolve_agent: no probability gate, cap 2)
+        # -> agent_evolution stage 2, which unlocks the release button.
+        for evo in range(2):
+            evolve_btn = probe_page.locator(
+                "button:has-text('✦ EVOLVE')").first
+            if evolve_btn.count() > 0 and evolve_btn.is_visible():
+                evolve_btn.click(timeout=4000)
+                print(f"[depth-probe:{candidate_label}] clicked "
+                      f"'✦ EVOLVE' ({evo + 1}/2)")
+                probe_page.wait_for_timeout(1200)
+            else:
+                print(f"[depth-probe:{candidate_label}] '✦ EVOLVE' not "
+                      f"visible on attempt {evo + 1} (not fatal)")
+                break
+        # show_release: the care-panel '💨 Отпустить' (.first — the dialog
+        # confirm renders the SAME label, so after the dialog opens we
+        # click .last = the dialog confirm for the actual release).
+        release_btn = probe_page.locator(
+            "button:has-text('💨 Отпустить')").first
+        if release_btn.count() > 0 and release_btn.is_visible():
+            release_btn.click(timeout=4000)
+            depth_probe["released_clicked"] = True
+            print(f"[depth-probe:{candidate_label}] clicked "
+                  "'💨 Отпустить' (show_release dialog opened)")
+            probe_page.wait_for_timeout(1200)
+        else:
+            print(f"[depth-probe:{candidate_label}] '💨 Отпустить' "
+                  "(show_release) not visible — evolution stage < 2? "
+                  "(not fatal)")
+        # Final words in the dialog textarea + confirm (.last = dialog)
+        try:
+            words_ta = probe_page.locator("textarea").first
+            if words_ta.count() > 0 and words_ta.is_visible():
+                words_ta.fill("Прощай, страх. Свободен.")
+                depth_probe["words_entered"] = True
+                probe_page.wait_for_timeout(1000)
+                confirm_btn = probe_page.locator(
+                    "button:has-text('💨 Отпустить')").last
+                if confirm_btn.count() > 0 and confirm_btn.is_visible():
+                    confirm_btn.click(timeout=4000)
+                    print(f"[depth-probe:{candidate_label}] confirm "
+                          "'💨 Отпустить' clicked (release_creature)")
+                    probe_page.wait_for_timeout(2000)
+        except Exception as e:
+            print(f"[depth-probe:{candidate_label}] dialog fill/confirm "
+                  f"failed (not fatal): {str(e)[:120]}")
+        # Receipt evidence (secondary) + the authoritative /health delta.
+        # The receipt markers are session-only UI: '✓ Отпущено:' + the
+        # quoted final words + 'отпустил свою мысль' render ONLY right
+        # after release_creature (the always-visible 'Отпущено в мир: N'
+        # progress line is NOT a receipt proof — it renders on every load).
+        receipt_body = probe_page.locator("body").inner_text()
+        depth_probe["receipt_seen"] = (
+            "✓ Отпущено" in receipt_body
+            or '"Прощай, страх. Свободен."' in receipt_body
+            or "отпустил свою мысль" in receipt_body
+        )
+        depth_probe["receipt_snippet"] = re.sub(
+            r"\s+", " ", receipt_body).strip()[:300]
+        depth_probe["complete_after"] = fetch_health_full().get(
+            "complete_releases")
+        if isinstance(depth_probe["complete_before"], int) and isinstance(
+                depth_probe["complete_after"], int):
+            depth_probe["complete_delta"] = (
+                depth_probe["complete_after"] - depth_probe["complete_before"])
+        print(f"[depth-probe:{candidate_label}] receipt_seen="
+              f"{depth_probe['receipt_seen']}, complete_releases: "
+              f"before={depth_probe['complete_before']} "
+              f"after={depth_probe['complete_after']} "
+              f"delta={depth_probe['complete_delta']}")
+        print(f"[depth-probe:{candidate_label}] "
+              f"{json.dumps(depth_probe, ensure_ascii=False)}")
+    except Exception as e:
+        depth_probe["error"] = str(e)[:200]
+        print(f"[depth-probe:{candidate_label}] ERROR (not fatal): "
+              f"{str(e)[:200]}")
+    finally:
+        if probe_ctx is not None:
+            try:
+                probe_ctx.close()
+            except Exception:
+                pass
+    return depth_probe
+
 with sync_playwright() as p:
     browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--enable-features=ClipboardReadWrite"])
     # TMA-Studio honest attempt: the pages.dev demo is a marketing landing
@@ -1001,6 +1176,19 @@ with sync_playwright() as p:
     if m7_probe["invoice_ok"] is not None:
         invoice_ok_rounds.append(("postloop", m7_probe["invoice_msg"]))
 
+    # ── Depth-win release probe (POST-mint, Lens #97 reframe) ──────────
+    # The win-path is DEPTH: ONE full release (summon -> Care -> 2x
+    # '✦ EVOLVE' stage 2 -> final words + real geo -> '💨 Отпустить')
+    # = 100%, not archetype breadth. Runs AFTER the whole mint block on
+    # purpose; its own fresh player identity so the released seed is
+    # attributable. Honest note: creates exactly ONE real released seed
+    # (status='released' + final_words + lat/lon) on prod per run.
+    depth_release_probe = run_depth_release_probe(browser)
+    depth_win_achieved = bool(
+        isinstance(depth_release_probe.get("complete_delta"), int)
+        and depth_release_probe["complete_delta"] >= 1
+    )
+
     print("=== COLLECTED:", collected)
     print("=== DISTINCT COUNT:", len(collected))
     print()
@@ -1026,6 +1214,11 @@ with sync_playwright() as p:
     print(f"m6_share_probe (round 1): {json.dumps(m6_share_probe, ensure_ascii=False) if m6_share_probe else 'not probed (no round produced a fresh summon — has_summoned never True)'}  (server-side /health share_count delta; share_creature records BEFORE the clipboard write, so clipboard errors are non-fatal)")
     print(f"m6_share_probe_postloop: {json.dumps(m7_probe.get('m6_share_probe_postloop'), ensure_ascii=False) if m7_probe.get('m6_share_probe_postloop') else 'not probed (no live fresh-summon card)'}  (post-loop share probe on the guaranteed fresh summon — deep link + 📍 birthplace read from the clipboard via navigator.clipboard.readText(); share_creature writes the card to the clipboard, so clipboard evidence is the authoritative M6 deep-link signal)")
     print(f"share_count_health: before={share_count_before} after={m6_share_probe.get('share_after') if m6_share_probe else None}  (from /health json share_count, M6 server-side share counter)")
+    print(f"complete_releases_before: {depth_release_probe.get('complete_before')}  (from /health json complete_releases, read before the depth release probe — seeds with status='released' + final_words + real geo)")
+    print(f"complete_releases_after: {depth_release_probe.get('complete_after')}  (from /health json complete_releases, read after the full release ritual)")
+    print(f"complete_releases_delta: {depth_release_probe.get('complete_delta')}  (0->1 = the depth win-path is REACHABLE on prod: ONE complete release with final words + real geo = 100% of the win, Lens #97 reframe)")
+    print(f"depth_win_achieved: {depth_win_achieved}  (True = /health complete_releases incremented by this run's release — the authoritative M3 signal, NOT just UI text)")
+    print(f"depth_release_probe: {json.dumps(depth_release_probe, ensure_ascii=False)}  (depth-win release ritual on prod: fresh player -> summon run-unique English Lover thought -> Care tab -> 2x '✦ EVOLVE' (stage 2, no probability gate) -> '💨 Отпустить' dialog -> final words 'Прощай, страх. Свободен.' + real geo (⟳) -> confirm; receipt_seen = '✓ Отпущено:' / quoted final words / 'отпустил свою мысль' in the body after confirm — session-only UI markers, the always-visible 'Отпущено в мир: N' progress line is NOT a receipt proof; honest note: creates exactly ONE real released seed on prod per run)")
     mc = fetch_mint_count()
     print(f"mint_count_health: {mc}  (from /health, json mint_count)")
     health_full = fetch_health_full()

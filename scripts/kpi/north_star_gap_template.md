@@ -28,7 +28,7 @@ Fingerprint деплоя: {{FINGERPRINT}} · Бандлы: {{BUNDLES}} · Playwr
 |---|---|---|---|---|---|---|---|
 | M1 | Geo% | доля существ с реальными координатами | {{GEO_PCT}}% | 100% | 🔴 критический | share-петлю (карточка без места = не несёт идентичность) | AUTO |
 | M2 | Vision-lore | кнопка «Open your eyes» + рендер лора | {{OYE_BTN}} | 1 | 🔴 критический | эмоцию/арт (kill-condition) | AUTO |
-| M3 | Win-path | уникальные архетипы, достижимые за прогон | {{ARCH_N}}/12 | 12/12 | 🟡 средний | контентную глубину → D7 | AUTO |
+| M3 | Win-path (depth, Lens #97) | полное отпускание: release с final words + реальный geo | {{COMPLETE_RELEASES}} | 1 (1 = 100%) | 🟡 средний | win-ритуал «Встреча, а не коллекция» → D7 | AUTO (release-probe) |
 | M4 | Дубликаты | unique/total при summons | {{UNIQ}}/{{TOTAL}} | 1.0 | 🟢 ок | экономику минта (размытие ценности) | AUTO |
 | M5 | Фрикция гейта/модалки | перехват pointer-events, гейт «Summon (1 Star)» | {{GATE}} | 0 блоков | 🟡 средний | плавность онбординга → D7 | AUTO |
 | M6 | Share-funnel | доля сессий с share-тапом | нет данных | TBD (цель ≥2% share, kill <2%) | 🔴 нет данных | рост охвата (kill-condition) | **NEEDS-CODE** |

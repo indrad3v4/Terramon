@@ -98,3 +98,62 @@ def test_tma_badge_from_one_complete_release() -> None:
 def test_tma_hydrates_complete_releases() -> None:
     assert "complete_releases" in _TMA_SRC
     assert '"complete_releases": progress.complete_releases' in _TMA_SRC
+
+
+def test_tma_release_persists_status_and_final_words() -> None:
+    """release_creature must PERSIST the release (status + final words).
+
+    iter-24 fix: the release path used to mutate seeds in memory only, so
+    /health complete_releases (a seed scan) stayed 0 forever — the depth
+    win was structurally unreachable. Both release flows must call
+    _MEMORY.update_seed with status='released' (+ final_words in the
+    v2 flow).
+    """
+    assert "_MEMORY.update_seed(self.agent, self.thought, status=\"released\"" in _TMA_SRC
+    assert "_MEMORY.update_seed(self.agent, self.thought, status=\"released\", final_words=words" in _TMA_SRC
+
+
+def test_memory_round_trip_final_words() -> None:
+    """JsonMemory must round-trip final_words + released status.
+
+    /health complete_releases scans seeds for status == 'released' AND
+    final_words non-empty AND real lat/lon — the scan only works if the
+    memory layer persists all three. Locks the JsonMemory.save_seed /
+    update_seed / load_all_seeds contract.
+    """
+    import tempfile
+
+    from terramon.adapters.json_memory import JsonMemory
+    from terramon.domain.thought_seed import ThoughtSeed
+
+    path = tempfile.mktemp(suffix=".jsonl")
+    try:
+        mem = JsonMemory(path)
+        mem.save_seed(ThoughtSeed(
+            raw_input="raw-thought", summoned_agent="Lover",
+            timestamp="2026-08-13T00:00:00", lat=50.0619, lon=19.9368,
+        ))
+        assert mem.update_seed(
+            "Lover", "raw-thought", status="released", final_words="Прощай"
+        ) is True
+        seeds = mem.load_all_seeds()
+        assert len(seeds) == 1
+        s = seeds[0]
+        assert s.status == "released"
+        assert s.final_words == "Прощай"
+        assert s.lat == 50.0619 and s.lon == 19.9368
+        # the /health depth scan formula
+        complete = sum(
+            1 for x in seeds
+            if getattr(x, "status", "") == "released"
+            and (getattr(x, "final_words", "") or "").strip()
+            and getattr(x, "lat", None) not in (None, 0)
+            and getattr(x, "lon", None) not in (None, 0)
+        )
+        assert complete == 1
+    finally:
+        try:
+            import os
+            os.unlink(path)
+        except OSError:
+            pass

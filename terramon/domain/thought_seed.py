@@ -44,6 +44,11 @@ class ThoughtSeed:
     # memorial survives reloads. Empty string = candle never lit.
     candle_lore: str = ""
 
+    # Release ritual (Lens #97 depth win): the player's goodbye at release —
+    # persisted on the seed so /health complete_releases can count it.
+    # Empty string = never released with words.
+    final_words: str = ""
+
     @classmethod
     def make(
         cls,
@@ -58,6 +63,7 @@ class ThoughtSeed:
         lon: float = 0.0,
         place_name: str = "",
         birth_embedding: dict[int, float] | None = None,
+        final_words: str = "",
     ) -> "ThoughtSeed":
         return cls(
             raw_input=raw_input,
@@ -71,4 +77,5 @@ class ThoughtSeed:
             lon=lon,
             place_name=place_name,
             birth_embedding=birth_embedding,
+            final_words=final_words,
         )

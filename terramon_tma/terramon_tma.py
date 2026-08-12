@@ -1532,6 +1532,13 @@ class TerramonState(rx.State):
         except Exception as e:
             log.warning(f"Failed to update seed status: {e}")
 
+        # Persist the release so it survives a restart (depth win, Lens #97):
+        # without this /health complete_releases stays 0 forever.
+        try:
+            _MEMORY.update_seed(self.agent, self.thought, status="released")
+        except Exception as e:
+            log.warning(f"Release persistence failed: {e}")
+
         # Reload terra
         try:
             seeds = _MEMORY.load_all_seeds()
@@ -1652,6 +1659,13 @@ class TerramonState(rx.State):
                         break
         except Exception as e:
             log.warning(f"Failed to update seed status: {e}")
+
+        # Persist the release (depth win, Lens #97): keep final words on the
+        # seed so complete_releases survives a restart.
+        try:
+            _MEMORY.update_seed(self.agent, self.thought, status="released", final_words=words)
+        except Exception as e:
+            log.warning(f"Release persistence failed: {e}")
 
         # Reload terra + refresh the released-based counter
         try:
@@ -4455,7 +4469,7 @@ def health(request):
     share_rate = (share_count / seed_count) if seed_count > 0 else None
     return JSONResponse({
         "status": "ok",
-        "tests": 519,  # pytest count, synced at depth-win (Lens #97: +7 durability_boot +10 depth_win)
+        "tests": 513,  # pytest count, synced at depth-win persistence fix (iter-24: was miscounted 519; real 513 after +2 persistence tests)
         "data_persisted": data_persisted,
         "data_restored_from_snapshot": bool(
             getattr(sys.modules.get(__name__), "_SNAPSHOT_RESTORED", False)

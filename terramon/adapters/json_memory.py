@@ -59,7 +59,8 @@ CREATE TABLE IF NOT EXISTS seeds (
     insight_embedding     TEXT,
     lat              REAL NOT NULL DEFAULT 0.0,
     lon              REAL NOT NULL DEFAULT 0.0,
-    place_name       TEXT NOT NULL DEFAULT ''
+    place_name       TEXT NOT NULL DEFAULT '',
+    final_words      TEXT NOT NULL DEFAULT ''
 )
 """
 
@@ -214,6 +215,10 @@ class JsonMemory(MemoryPort):
         # Candle ritual: persist the creature's new line (empty default omitted)
         if seed.candle_lore:
             record["candle_lore"] = seed.candle_lore
+        # Release ritual: persist the player's farewell words (empty default
+        # omitted so old seeds without final_words stay backward compatible)
+        if seed.final_words:
+            record["final_words"] = seed.final_words
         try:
             with self.path.open("a", encoding="utf-8") as file:
                 file.write(json.dumps(record, ensure_ascii=False) + "\n")
@@ -287,6 +292,7 @@ class JsonMemory(MemoryPort):
         raw_input: str,
         status: str | None = None,
         candle_lore: str | None = None,
+        final_words: str | None = None,
         minted: bool | None = None,
         minted_at: str | None = None,
     ) -> bool:
@@ -294,9 +300,11 @@ class JsonMemory(MemoryPort):
 
         Used by the release + candle rituals to persist status/candle_lore
         on the creature seed (JSONL is append-only, so we rewrite the file
-        atomically). M7 mint loop: ``minted``/``minted_at`` persist the real
-        mint record (the creature became a collectible). Returns True when a
-        matching record was updated.
+        atomically). The release ritual persists ``status='released'`` plus
+        ``final_words`` (the player's farewell) so /health can count real
+        complete releases. M7 mint loop: ``minted``/``minted_at`` persist the
+        real mint record (the creature became a collectible). Returns True
+        when a matching record was updated.
         """
         if not self.path.exists():
             return False
@@ -319,6 +327,8 @@ class JsonMemory(MemoryPort):
                     record["status"] = status
                 if candle_lore is not None:
                     record["candle_lore"] = candle_lore
+                if final_words is not None:
+                    record["final_words"] = final_words
                 if minted is not None:
                     record["minted"] = bool(minted)
                 if minted_at is not None:
@@ -908,6 +918,7 @@ def _row_to_seed(row: sqlite3.Row) -> ThoughtSeed:
         lat=float(d.get("lat", 0.0) or 0.0),
         lon=float(d.get("lon", 0.0) or 0.0),
         place_name=d.get("place_name", "") or "",
+        final_words=d.get("final_words", "") or "",
     )
 
 
@@ -954,8 +965,8 @@ class SqliteMemory(MemoryPort):
                 insight_driver, insight_barrier, insight_therefore,
                 insight_archetype, insight_nuance, insight_confidence,
                 insight_geo_lat, insight_geo_lon, insight_geo_place_name,
-                insight_embedding, lat, lon, place_name
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                insight_embedding, lat, lon, place_name, final_words
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             self._seed_to_row(seed),
         )
         self._conn.commit()
@@ -1009,6 +1020,7 @@ class SqliteMemory(MemoryPort):
             seed.lat,
             seed.lon,
             seed.place_name,
+            getattr(seed, 'final_words', ''),
         )
 
     def load_all_seeds(self, offset: int | None = None, limit: int | None = None) -> list[ThoughtSeed]:
