@@ -81,6 +81,21 @@ def check_resonances(collection: set[str]) -> list[str]:
     return found
 
 
+def _is_complete_release(seed) -> bool:
+    """A release counts as COMPLETE (depth win) when it has final words
+    AND a real geo anchor — the thought was met, lived with, and let go
+    at a real place (Lens #97 Transformation). lat/lon 0 or None = no geo.
+    """
+    try:
+        words = (getattr(seed, "final_words", "") or "").strip()
+        lat = getattr(seed, "lat", None)
+        lon = getattr(seed, "lon", None)
+        has_geo = lat not in (None, 0) and lon not in (None, 0)
+        return bool(words) and has_geo
+    except Exception:
+        return False
+
+
 # ---------------------------------------------------------------------------
 # I04: Squad system — up to 3 creatures, cross-creature resonances
 # ---------------------------------------------------------------------------
@@ -205,6 +220,12 @@ class PlayerProgress:
     # `collection`/`distinct_count` is kept for backward compatibility.
     released_archetypes: set[str] = field(default_factory=set)
 
+    # Depth win (prism roast 2026-08-13, Lens #97 Transformation): ONE
+    # thought lived all the way through — released WITH final words AND
+    # a real geo anchor — beats five archetype checkmarks. The badge comes
+    # from DEPTH, not breadth; this is the "Отпущено в мир" counter.
+    complete_releases: int = 0
+
     # M7: Mint counter — creatures minted into collectibles. Session mirror
     # of the persisted seed records (the seeds are the source of truth; this
     # is what /health exposes for the KPI cron). Default keeps old progress
@@ -229,6 +250,8 @@ class PlayerProgress:
             p.award(s.summoned_agent, Rarity(s.rarity))
             if getattr(s, "status", "") == "released":
                 p.record_release(s.summoned_agent)
+                if _is_complete_release(s):
+                    p.complete_releases += 1
         return p
 
     @property
@@ -263,6 +286,28 @@ class PlayerProgress:
     def record_release(self, archetype: str) -> None:
         """Record a released creature's archetype (distinct set)."""
         self.released_archetypes.add(archetype)
+
+    def record_complete_release(self, words: str, lat, lon) -> bool:
+        """Depth win: count a release only when it carried final words AND
+        a real geo anchor — the thought was met, lived with, and let go at
+        a real place (Lens #97 Transformation).
+
+        Returns True when the release qualifies (increments complete_releases),
+        False otherwise — callers can branch on the receipt.
+        """
+        try:
+            if (words or "").strip() and lat not in (None, 0) and lon not in (None, 0):
+                self.complete_releases += 1
+                return True
+        except Exception:
+            pass
+        return False
+
+    @property
+    def depth_win_reached(self) -> bool:
+        """Lens #97: the win is DEPTH — one thought lived all the way
+        through (released with final words at a real place)."""
+        return self.complete_releases >= 1
 
     @property
     def current_tier_name(self) -> str:

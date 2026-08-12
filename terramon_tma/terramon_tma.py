@@ -551,6 +551,7 @@ class TerramonState(rx.State):
     released_words: str = ""
     released_just_now: bool = False
     released_count: int = 0  # reframed win counter — released-based ("Встречено X из 5")
+    complete_releases: int = 0  # depth win (Lens #97): releases WITH final words + real geo
 
     # «Зажечь свечу» — WebLN candle ritual on a released creature's birthplace.
     # 500-sat keysend zap from the player's browser wallet (Alby extension);
@@ -672,9 +673,11 @@ class TerramonState(rx.State):
             yield TerramonState.summon
 
     def _refresh_released_count(self) -> None:
-        """Reframe: 'Встречено X из 5' reads the released-based win counter."""
+        """Reframe: released-based win counter + the depth counter
+        (complete releases WITH final words + real geo, Lens #97)."""
         try:
             self.released_count = int(_LOOP.progress.released_count())
+            self.complete_releases = int(_LOOP.progress.complete_releases)
         except Exception:
             try:
                 seeds = _MEMORY.load_all_seeds()
@@ -1089,6 +1092,8 @@ class TerramonState(rx.State):
             self.next_tier_distinct = hydrated["next_tier_distinct"]
             # G05: released-based win counter for the "Встречено X из 5" display
             self.released_count = hydrated["released_count"]
+            # Depth win (Lens #97): complete releases (final words + real geo)
+            self.complete_releases = hydrated.get("complete_releases", 0)
             # F3 gate: a returning player has already been through the
             # summon flow — keep them unblocked across redeploys. The MVP
             # unlock is free anyway (Stars fallback sets unlocked=True),
@@ -1583,6 +1588,18 @@ class TerramonState(rx.State):
             _LOOP.progress.record_release(self.agent)
         except Exception as e:
             log.warning(f"record_release failed: {e}")
+
+        # Depth win (prism roast, Lens #97): counts ONLY releases WITH
+        # final words AND a real geo anchor — one thought lived all the
+        # way through beats five archetype checkmarks.
+        try:
+            _complete = _LOOP.progress.record_complete_release(
+                words, self.agent_lat, self.agent_lon
+            )
+            if _complete:
+                self.complete_releases = int(_LOOP.progress.complete_releases)
+        except Exception as e:
+            log.warning(f"record_complete_release failed: {e}")
 
         # Publish CreatureReleased event (global map + Nostr, when configured)
         try:
@@ -2104,7 +2121,7 @@ class TerramonState(rx.State):
             f"🃏 Terramon — {self.agent}\n"
             f"✦ Rarity: {self.rarity} {self.sigil}\n"
             f"   \"{self.thought}\"\n"
-            f"Lv.{self.level} · Встречено {self.released_count} из 5 мыслей\n"
+            f"Lv.{self.level} · Отпущено в мир: {self.complete_releases}\n"
             f"{_place_line}"
             f"{_link}"
         )
@@ -2390,6 +2407,7 @@ def hydrate_from_memory(
         "goal": progress.goal_distinct,
         "goal_reached": progress.distinct_count >= progress.goal_distinct,
         "released_count": progress.released_count(),
+        "complete_releases": progress.complete_releases,
         "summon_streak": progress.summon_streak,
         "tier_name": progress.current_tier_name,
         "tier_badge": progress.current_tier_badge,
@@ -2528,8 +2546,7 @@ def progress_header() -> rx.Component:
     return rx.box(
         rx.vstack(
             rx.text(
-                "Встречено " + TerramonState.released_count.to_string()
-                + " из 5 мыслей",
+                "Отпущено в мир: " + TerramonState.complete_releases.to_string(),
                 color="#e5e7eb",
                 font_size="0.85em",
                 font_weight="bold",
@@ -2557,9 +2574,10 @@ def progress_header() -> rx.Component:
                 color="#6b7280",
                 font_size="0.7em",
             ),
-            # G05 reframe: badge earned when 5 thoughts are released
+            # Depth win (Lens #97): badge earned by ONE complete release —
+            # a thought let go with final words at a real place.
             rx.cond(
-                TerramonState.released_count >= 5,
+                TerramonState.complete_releases >= 1,
                 rx.text("★ Встретивший", color="#f59e0b", font_size="0.75em",
                         font_weight="bold"),
                 rx.fragment(),
@@ -3798,12 +3816,13 @@ def index() -> rx.Component:
                                         color="#f59e0b", font_weight="bold",
                                         font_size="0.7em"),
                                 rx.cond(
-                                    TerramonState.released_count >= 5,
+                                    TerramonState.complete_releases >= 1,
                                     rx.text("★ Встретивший", color="#22c55e",
                                             font_weight="bold", font_size="0.65em"),
                                     rx.text(
-                                        "Встречено " + TerramonState.released_count.to_string()
-                                        + " из 5", color="#a78bfa", font_size="0.65em",
+                                        "Отпущено в мир: "
+                                        + TerramonState.complete_releases.to_string(),
+                                        color="#a78bfa", font_size="0.65em",
                                     ),
                                 ),
                                 spacing="1",
