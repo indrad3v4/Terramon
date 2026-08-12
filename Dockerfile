@@ -77,10 +77,12 @@ RUN mkdir -p /app/data /app/.web/backend /app/.local/share/reflex /app/reflex.lo
     touch /app/.web/backend/stateful_pages.json && \
     chown -R terramon:terramon /app/data /app/.web/backend/stateful_pages.json /app/.web /app/.local/share/reflex /app/reflex.lock
 
-# Container starts as root so startup.sh can fix Railway volume ownership
-# (volumes mount root-owned at container start; a non-root user cannot
-# chmod/chown them — that was the crash loop). startup.sh drops privileges
-# back to terramon before exec'ing the app.
+# Container runs as root: Railway volumes mount root-owned at container
+# start, and the app must be able to write /app/data regardless of mount
+# ownership. (The earlier non-root USER terramon + startup chmod combo
+# caused the PermissionError crash loop — a non-root user cannot chmod a
+# root-owned volume mount.) Reflex in an isolated Railway container is
+# safe as root; the app writes only inside /app.
 USER root
 
 # Railway provides $PORT. Reflex serves frontend + backend together in prod.
@@ -103,9 +105,7 @@ find /app/data/creatures -name "*.png" -type f -mtime +30 -delete 2>/dev/null ||
 find /app/data/creatures/thumbnails -name "*.png" -type f -mtime +30 -delete 2>/dev/null || true\n\
 find /app/data/creatures/placeholders -name "*.png" -type f -mtime +30 -delete 2>/dev/null || true\n\
 \necho "[startup] Cleaned portraits older than 30 days"\n\
-if [ "$(id -u)" = "0" ]; then\n\
-  exec setpriv --reuid=terramon --regid=terramon --init-groups "$@" 2>/dev/null || exec su terramon -s /bin/sh -c "$*"\n\
-fi\n\
+echo "[startup] Launching app as uid=$(id -u)"\n\
 exec "$@"' > /app/startup.sh && chmod +x /app/startup.sh
 
 # Run both frontend (static, on $PORT) and backend (API/websocket).
