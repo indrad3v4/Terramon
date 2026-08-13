@@ -595,6 +595,7 @@ class TerramonState(rx.State):
     release_ritual_invoice: str = ""
     release_ritual_ref: str = ""
     release_ritual_qr: str = ""
+    release_ritual_lightning_uri: str = ""  # lightning: deep link (1-tap wallet open)
     release_ritual_auto_verify: bool = False
     release_ritual_verify_attempts: int = 0
     pending_words: str = ""
@@ -1664,6 +1665,7 @@ class TerramonState(rx.State):
         try:
             if not _ALBY.url or not _ALBY.api_key:
                 self.release_ritual_invoice = ""
+                self.release_ritual_lightning_uri = ""
                 self.agent_message = (
                     "🪙 Ритуал: Lightning не настроен — используй Stars "
                     f"({RITUAL_RELEASE_STARS} ⭐)."
@@ -1674,6 +1676,7 @@ class TerramonState(rx.State):
                 price, f"Terramon release ritual · {self.pending_words[:40]}"
             )
             self.release_ritual_invoice = req.destination
+            self.release_ritual_lightning_uri = "lightning:" + req.destination
             self.release_ritual_ref = req.verification_ref
             try:
                 self.release_ritual_qr = _qr_data_uri(req.destination)
@@ -4067,6 +4070,21 @@ def ritual_payment_panel() -> rx.Component:
                             on_click=rx.set_clipboard(TerramonState.release_ritual_invoice),
                             variant="surface", size="1", color_scheme="gray",
                             width="100%",
+                        ),
+                        rx.link(
+                            "⚡ Открыть кошелёк",
+                            href=TerramonState.release_ritual_lightning_uri,
+                            display="block",
+                            text_align="center",
+                            width="100%",
+                            padding="0.5rem 1rem",
+                            border_radius="8px",
+                            background="#fbbf24",
+                            color="#1c1917",
+                            font_size="0.8em",
+                            font_weight="bold",
+                            text_decoration="none",
+                            _hover={"background": "#fcd34d"},
                         ),
                         rx.cond(
                             TerramonState.release_ritual_auto_verify,
