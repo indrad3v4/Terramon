@@ -1,52 +1,51 @@
-# Terramon — North Star Gap Report (v2) · 2026-08-13 (iter-23)
+# Terramon — North Star Gap Report (v3, win-centric) · 2026-08-13 (iter-27)
 
-Fingerprint: `2a1e478` (прод: `tests:502*`, `data_persisted:false` ⚠️ — регресс vs iter-22 (было true), `data_restored_from_snapshot:false`, живой `seed_count:21`, `share_count:3`, `mint_count:0`, `alby_configured:true`) · Playwright/Chromium headless + TMA-mock · Target: https://terramon-tma-production.up.railway.app · *502 — счётчик в /health синхронизирован этим коммитом (был 496; +6 тестов).
+Fingerprint: `99b20ff` (прод: `tests:522`, `data_persisted:false`, `seed_count:45→48`, `share_count:8→9`, `mint_count:0`, `complete_releases:0`, `alby_configured:true`) · Playwright/Chromium headless + TMA-mock · Target: https://terramon-tma-production.up.railway.app
 
 ---
 
 ## 0. ВЕРДИКТ ДНЯ (TL;DR)
 
-- **North Star Score: 75/100** (плато 11-я итерация; Geo/Lore/Win-path железно; инвойс-нога M7 доказана live 9-й раз; MintLoop=0 — ждёт РЕАЛЬНОГО платежа владельца)
-- Топ-3 блокера: **1) M7 settle-нога: нужен РЕАЛЬНЫЙ ПЛАТЁЖ владельца (~3000 sats) — kill-окно пошло: часы kill-condition ПОЧИНЕНЫ и теперь тикают от первого призыва 2) data_persisted:false — durability-регресс на проде (volume снова не подтверждён) 3) нет реальных игроков (player_count:0)** + M1 ждёт device-проверки
-- Kill-condition монитор: share 3 · mint 0 · **kill-часы РАНЬШЕ НИКОГДА НЕ ЗАПУСКАЛИСЬ (days_mint_zero:null вечно)** — iter-23 чинит это: якорь = первый призыв
-- 🎯 **ГЛАВНОЕ СОБЫТИЕ iter-23 — починен СЛЕПОЙ kill-condition watchdog**: (а) `days_mint_zero` = days_since_last_mint, а когда минта НЕ БЫЛО НИКОГДА — якорь на `days_since_first_seed()` (первый призыв = запуск игры), т.е. «mint=0 за 30 дней» теперь реально сработает (раньше null навсегда → kill-condition НИКОГДА не мог триггернуться); (б) `share_rate` вычисляется честно = share_count/seed_count (было захардкожено None); (в) `triggered` = days_mint_zero >= 30 (форма сохранена). +6 тестов (502 зелёных). Плюс: смержен незакоммиченный sync 466→496 (HEAD был КРАСНЫЙ — тест утверждал 466 при source 496) и обновлён durability-снапшот (21/3/0) — прошлая сессия его скачала, но не закоммитила.
+- **North Star Score: 27.8/100** — формула v3: `60·min(complete_releases,1) + 25·Geo% + 15·ShareRate` = `60·0 + 25·1.0 + 15·0.1875`
+- Топ-3 блокера: **1) Win-path НЕДОСТИЖИМ на проде — ритуал отпускания (и его платёжный экран) не открывался: 2× EVOLVE не доводил существо до стадии 2 (инкремент 2-го клика терялся из-за generator-хендлера) → «💨 Отпустить» не рендерился → complete_releases намертво в 0 → 60/100 заперты. ФИКС НАПИСАН И ЗАПУШЕН В ЭТОЙ ИТЕРАЦИИ 2) M7 settle-нога: нужен РЕАЛЬНЫЙ платёж владельца (3000 sats или 5⭐) 3) M1 ждёт device-проверки (headless-симуляция, не реальное устройство)**
+- Kill-condition монитор: share_rate 18.75% (9/48) · mint 0 · days_mint_zero: 0/30 → **НЕ триггернут** ✅
+- 🎯 **ГЛАВНОЕ СОБЫТИЕ iter-27 — win-path РАЗБЛОКИРОВАН кодом**: KPI-проба M9 (ритуал) на проде ПОДТВЕРДИЛА баг: после 2× «✦ EVOLVE» → `'💨 Отпустить' not visible — evolution stage < 2?`. Причина: `evolve_agent` был generator-хендлером — `yield rx.call_script(setTimeout→sendEvent)` приостанавливал обработчик, задерживал state-delta, и 2-й клик читал устаревший state → инкремент терялся → `agent_evolution` застревал на 1 → гейт `agent_evolution >= 2` не открывался. Фикс: plain-хендлер (каждый клик инкрементирует ровно один раз, немедленно) + gated `rx.moment(interval=1600, on_change=clear_evolution_animation)` для авто-сброса анимации (паттерн lightning-поллера). +5 тестов (527 зелёных).
 
-## 1. NORTH STAR SCORE (композит)
+## 1. NORTH STAR SCORE (v3, win-centric)
 
-| Компонент | Вес | Сегодня | Нормализация |
+| Компонент | Вес | Сегодня | Значение |
 |---|---|---|---|
-| Geo-привязка | 25 | **100%** (map-url 50.0619, 19.9368) | headless-симуляция, ждёт device-проверки |
-| Vision-lore («Open your eyes») | 25 | **1** | кнопка в DOM (main_card_oye_after_care: 1) |
-| Win-path (достижимость) | 25 | **12/12** | min(архетипов/12, 1) — distinct 12, failed_rounds: [] |
-| Mint-loop | 25 | **0** | инвойс создан (invoice_ok:true, 9-й прогон), auto-verify вооружён («⏳ 1/30»), settle не было → mint_count=0 |
-| **ИТОГО** | 100 | **75/100** | |
+| Win-path: PAID complete release (final words + real geo, ритуал оплачен) | 60 | **0** | complete_releases=0; ритуал НЕдостижим на проде до этого коммита → 0/60 |
+| Geo% (якорь победы) | 25 | **25** | 100% headless-сим (map-url 50.0619,19.9368) — ждёт device-проверки |
+| ShareRate (share/seed) | 15 | **2.8** | 9/48 = 18.75% |
+| **ИТОГО** | 100 | **27.8/100** | |
 
-Боевая формула (включается, когда есть реальные игроки): NSS = 40·MintRate + 30·D7 + 15·Geo + 15·Lore.
+Lore/MintLoop — ДИАГНОСТИКА (не NSS): M2 lore = 1 (OYE-кнопка в DOM) · M7 инвойс-нога LIVE (⚡3000 sats, auto-verify 1/30 вооружён) · mint_count=0 (нет реального платежа).
 
 ## 2. ГЭП-ТАБЛИЦА (мост «инженерия → северная звезда»)
 
 | # | Метрика | Что меряет | Сегодня | Цель | Гэп | Блокирует | Измерение |
 |---|---|---|---|---|---|---|---|
-| M1 | Geo% | доля существ с реальными координатами | 100% (map-url) | 100% | 🟢 код-ок; ждёт device | share-петлю | AUTO + **device** |
-| M2 | Vision-lore | «Open your eyes» + рендер лора | 1 | 1 | 🟢 ок | эмоцию/арт | AUTO |
-| M3 | Win-path | уникальные архетипы за прогон | 12/12 | 12/12 | 🟢 ок | контентную глубину → D7 | AUTO |
-| M4 | Дубликаты | unique/total | 12/19 в прогоне (dedup работает) | 1.0 | 🟢 ок | экономику минта | AUTO |
-| M5 | Фрикция | гейт/модалки | 0 блоков (failed_rounds: []) | 0 | 🟢 ок | онбординг → D7 | AUTO |
-| M6 | Share-funnel | доля сессий с share-тапом | счётчик жив (2→3 live); deep-link + 📍 в клипборде | ≥2% (kill <2%) | 🔴 нет игроков | охват (kill-condition) | AUTO + **люди** |
-| M7 | Mint rate | % саммонеров с mint | 0 (mint_count=0) | ≥2% | 🔴 **инвойс-нога доказана (9-й раз); settle ждёт платёж** | саму северную звезду | AUTO + **платёж владельца** |
-| M8 | D7 retention | возврат на 7-й день | замерен кодом (0/0/0.0 — нет игроков) | кохортный бенчмарк | 🔴 нет игроков | 2-ю половину NSS | AUTO + **люди** |
+| M1 | Geo% | доля существ с реальными координатами | 100% (map-url, симуляция) | 100% | 🟢 код-ок; **ждёт device** | сам win (без якоря release не полный) | AUTO + **device** |
+| M2 | Vision-lore | кнопка «Open your eyes» + рендер | 1 (main_card_oye_after_care:1) | 1 | 🟢 ок | эмоцию/арт | AUTO |
+| M3 | Win-path (depth) | complete_releases: release с final words + real geo, ритуал ОПЛАЧЕН | **0** (ритуал был недостижим → фикс запушен) | 1 (1 = 100%) | 🔴 **фикс в деплое; ждёт РЕАЛЬНЫЙ платёж** | 60/100 NSS | AUTO + **платёж владельца** |
+| M4 | Дубликаты | unique/total | 12/45 | 1.0 | 🟢 ок | экономику минта | AUTO |
+| M5 | Фрикция | гейт/модалки | 0 блоков (failed_rounds: []) | 0 | 🟢 ок | онбординг | AUTO |
+| M6 | Share-funnel | share_count/seed_count | 9/48 = 18.75% (8→9 live) | ≥2% (kill <2%) | 🟢 ок | охват (kill-condition) | AUTO |
+| M7 | Mint loop | mint_count / инвойс-нога | 0; инвойс LIVE (⚡3000 sats, STARS 25) | ≥2% | 🔴 **settle ждёт платёж** | метрику минта | AUTO + **платёж** |
+| M8 | D7 retention | возврат на 7-й день | 0/0/0.0 (нет игроков) | кохортный бенчмарк | 🔴 нет игроков | 2-ю половину NSS | AUTO + **люди** |
+| M9 | RitualPaid | monetised win-path: «⚡ Ритуал отпускания:» инвойс-маркер | **НЕ ДОСТИГНУТ** (ритуал не открывался) → фикс запушен, перепроверка в след. итерации | 1 | 🔴 **фикс в деплое** | доказательство live-монетизации | AUTO (инвойс = доказательство; платёж — никогда) |
 
-Регрессионные guard (инженерный health, AUTO): **502 теста зелёные** (+6 к iter-22, регрессий 0) · reflex export --frontend-only --no-zip (запущен) · py_compile OK · /health tests count синхронизирован (502).
+Регрессионные guard (AUTO): **527 тестов зелёные** (+5 к прошлому, регрессий 0) · reflex export --frontend-only --no-zip OK · py_compile OK · /health tests:522 (прод ещё на старом коммите, синхронизация после деплоя).
 
 ## 3. ТОП-3 БЛОКЕРА (ранжировано)
 
-1. **M7 settle-нога: нужен РЕАЛЬНЫЙ ПЛАТЁЖ** (~3000 sats, ~$0.30). Инвойс создаётся (invoice_ok:true), auto-verify тикает («⏳ 1/30»), settle→mint-запись→счётчик юнит-доказаны, лейблы честные (Stars vs sats), Copy BOLT11 есть. **Kill-часы iter-23 ПОЧИНЕНЫ**: раньше days_mint_zero был null навсегда (kill-condition слепой) — теперь якорь на первый призыв, окно реально идёт. → **Действие владельца (2 мин)**: бот @terrramonBot → призвать свежее существо → Care → «⚡ Mint via Lightning · 3000 sats» → оплатить (WebLN/QR/BOLT11). mint_count станет 1 → MintLoop=1 → **NSS 100/100**.
-2. **data_persisted:false на проде — durability-регресс** (iter-22 было true, volume был примонтирован; сейчас false, restore не сработал, restored 0). Снапшот обновлён и закоммичен (21/3/0) — следующая пересборка забейкает свежий baseline в /app/boot_snapshots. → **Действие владельца**: Railway dashboard → проект Terramon → Volume `terramon-data` @ `/app/data` — проверить, что примонтирован (после редеплоя /health должен показать data_persisted:true).
-3. **Нет реальных игроков** (player_count:0, returning_players_7d:0) — M6/M8 и боевая формула мертвы без людей; рост seed 16→19→21 неразличим между KPI-пробами и анонимными пользователями (бота-токена нет). → **Действие владельца**: TERRAMON_BOT_TOKEN в Railway env (initData-верификация → player_count оживёт) + публикация бота (BotFather → /setmenubutton → WebApp URL).
+1. **Win-path недостижим на проде (чинится в этом коммите)** — generator-хендлер `evolve_agent` терял инкремент 2-го клика EVOLVE → стадия застревала на 1 → «💨 Отпустить» и платёжный экран ритуала не открывались → complete_releases намертво 0. Фикс: plain-хендлер + gated rx.moment авто-сброс. После деплоя KPI-проба M9 должна увидеть «⚡ Ритуал отпускания:» (создание BOLT11 = живое доказательство; платить НИКОГДА).
+2. **M7/M3 settle-нога — нужен РЕАЛЬНЫЙ платёж владельца** (~3000 sats на Alby Hub, или 5⭐) — единственный способ перевести complete_releases 0→1 и mint_count 0→1. Всё код-сайд сделано: инвойс создаётся, auto-verify вооружён, ритуал теперь достижим.
+3. **M1: headless-геолокация — не реальное устройство** — Playwright `grant_permissions + set_geolocation` симулирует разрешение устройства; реальный якорь на телефоне владельца нужен для финального подтверждения Geo%=100%.
 
 ## 4. EVIDENCE
 
-- KPI-прогон iter-23: distinct 12/12 (failed_rounds: []), geo map-url 50.0619/19.9368, OYE 1, `invoice_ok:true` («⚡ Invoice ready») + `auto_verify_seen:true` («⏳ Auto-checking payment… 1/30») + `lightning_price_sats:3000` (честная цена Lightning-кнопки) + `mint_price_sats:15` (единица — STARS, не sats), share_count 2→3 live (deep link + «📍 Краков» в клипборде), mint_count 0, data_persisted:false (⚠️), alby_configured:true.
-- Новый код (grep-верифицирован): `def days_since_first_seed` (json_memory.py:393, мин. timestamp первого сида, defensive как days_since_last_mint), `days_mint_zero = days_since_last_mint if ... else days_since_first_seed` + `share_rate = (share_count / seed_count) if seed_count > 0 else None` (terramon_tma.py:4419-4424), `_dsfs = getattr(_MEMORY, "days_since_first_seed", None)` (getattr-фолбэк, деградация честная), tests: `test_days_since_first_seed_*` ×4, `test_health_kill_clock_anchors_to_first_seed_when_no_mint` + `test_health_share_rate_computed` (test_d7_retention.py, test_health_persistence.py).
-- OSS-референсы iter-23: **dead-man-switch паттерн** — spinov001-art/data-pipeline-monitoring (health checks + dead man switch: «нет heartbeat N дней → алерт»; РЕПЛИЦИРОВАНО: якорь kill-часов на первый activity), Drew-Opexcell/hushbeat (silent-until-broken, stdlib-only; AVOID: зависимости не нужны — у нас getattr-фолбэк); cohort/retention: maladeep/cohort-retention-rate-analysis-in-python (форма eligible/retained/rate — РЕПЛИЦИРОВАНА в iter-22); TMA+LN: getalby/lightning-browser-extension (585★, BOLT11-ясность), mozharov/zapgram (Telegram-нативный LN, copy-paste BOLT11 — РЕПЛИЦИРОВАНО в iter-22).
-- Ограничение честно: headless-геолокация = Playwright-симуляция, НЕ устройство; place_name в headless = гейт-баннер; mint-проба никогда не платит (присутствие-only); kill_condition.days_mint_zero при отсутствии и минта и сидов = null (нет данных — не поломка); data_persisted:false — это «volume не подтверждён на текущем деплое», а не «код сломан».
+KPI run (EXIT=0): `geo_ok_rounds: [1]` (map-url `/static-map?lat=50.0619&lon=19.9368`) · `distinct_archetypes: 12` · `oye_buttons_total: 1` · `m7_probe: invoice_ok=True, lightning_price_sats=3000, auto_verify_marker='⏳ Auto-checking payment… 1/30'` · `m6: share 8→9, deep-link ✅, карточка с birthplace` · `depth_release_probe: released_clicked=False — '💨 Отпустить' not visible — evolution stage < 2?` (баг, подтверждённый на проде) · `complete_releases: 0→0` · `mint_count: 0` · `failed_rounds: []` · `data_restored_from_snapshot: False` (durability-флаг, диагностика).
+
+Фикс в коммите iter-27: `terramon_tma/terramon_tma.py` (plain `evolve_agent` + gated rx.moment в `creature_care_panel`, строки ~3223-3235) + `tests/test_evolve_release_gate.py` (5 тестов: plain-handler, stage-2 гейт, авто-сброс, отсутствие JS-сброса).

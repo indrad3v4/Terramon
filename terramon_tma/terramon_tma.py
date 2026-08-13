@@ -1433,15 +1433,17 @@ class TerramonState(rx.State):
                                 level=self.level, total_xp_earned=self.xp + (self.level-1)*100))
         self.agent_message = msg.text
         self.agent_last_message = msg.text
-        # I08: Trigger evolution shimmer animation
+        # I08 v2 (iter-26): evolution shimmer — PLAIN (non-generator) handler.
+        # The old generator yielded rx.call_script(setTimeout→sendEvent), which
+        # suspended the handler and delayed the state delta; under load the
+        # second EVOLVE click then read a stale state and its increment was
+        # LOST (agent_evolution stuck at 1 → '💨 Отпустить' never rendered →
+        # the win-path release ritual was unreachable on prod). A plain handler
+        # delivers the full delta on return: every click increments exactly
+        # once, immediately. The animation flag is auto-cleared by the gated
+        # rx.moment in creature_care_panel (mirrors poll_portrait) — no JS
+        # setTimeout/sendEvent round-trip needed.
         self.evolve_animating = True
-        # Reset animation state after 1.5s via JS setTimeout
-        try:
-            yield rx.call_script(
-                'setTimeout(() => { try { reflex.sendEvent("clear_evolution_animation", {}); } catch(e) { console.warn("evolve reset", e); } }, 1500)'
-            )
-        except Exception:
-            pass
 
     @rx.event
     def clear_evolution_animation(self):
@@ -3218,6 +3220,19 @@ def creature_care_panel() -> rx.Component:
                     ),
                     rx.fragment(),
                 ),
+                # I08 v2: evolution shimmer auto-clear — gated rx.moment
+                # (mirrors the lightning verify poller: cond gate mounts the
+                # moment only while the flag is set; the on_change fires once
+                # ~1.6s later, clears the flag and the cond unmounts it).
+                rx.cond(
+                    TerramonState.evolve_animating,
+                    rx.moment(
+                        interval=1600,
+                        on_change=TerramonState.clear_evolution_animation,
+                        display="none",
+                    ),
+                    rx.fragment(),
+                ),
                 spacing="3",
                 align="center",
                 width="100%",
@@ -4747,7 +4762,7 @@ def health(request):
     share_rate = (share_count / seed_count) if seed_count > 0 else None
     return JSONResponse({
         "status": "ok",
-        "tests": 522,  # pytest count, synced at ritual monetisation (iter-26: +9 ritual tests)
+        "tests": 527,  # pytest count, synced at iter-27 (evolve plain-handler gate: +5 tests)
         "data_persisted": data_persisted,
         "data_restored_from_snapshot": bool(
             getattr(sys.modules.get(__name__), "_SNAPSHOT_RESTORED", False)
