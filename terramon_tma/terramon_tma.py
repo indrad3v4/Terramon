@@ -4951,6 +4951,7 @@ def health(request):
         _restored_mint = 0
         _restored_seed = 0
         _restored_share = 0
+        _restored_complete = 0
         if getattr(sys.modules.get(__name__), "_SNAPSHOT_RESTORED", False):
             try:
                 _restored_counts = getattr(
@@ -4959,13 +4960,16 @@ def health(request):
                 _restored_mint = int(_restored_counts.get("mint_count", 0) or 0)
                 _restored_seed = int(_restored_counts.get("seed_count", 0) or 0)
                 _restored_share = int(_restored_counts.get("share_count", 0) or 0)
+                _restored_complete = int(_restored_counts.get("complete_releases", 0) or 0)
             except Exception:
                 _restored_mint = 0
                 _restored_seed = 0
                 _restored_share = 0
+                _restored_complete = 0
         mint_count += _restored_mint
         seed_count += _restored_seed
         share_count += _restored_share
+        complete_releases += _restored_complete
     except Exception:
         data_persisted = False
         mint_count = 0
@@ -4984,6 +4988,7 @@ def health(request):
         _restored_mint = 0
         _restored_seed = 0
         _restored_share = 0
+        _restored_complete = 0
         if getattr(sys.modules.get(__name__), "_SNAPSHOT_RESTORED", False):
             try:
                 _restored_counts = getattr(
@@ -4992,13 +4997,16 @@ def health(request):
                 _restored_mint = int(_restored_counts.get("mint_count", 0) or 0)
                 _restored_seed = int(_restored_counts.get("seed_count", 0) or 0)
                 _restored_share = int(_restored_counts.get("share_count", 0) or 0)
+                _restored_complete = int(_restored_counts.get("complete_releases", 0) or 0)
             except Exception:
                 _restored_mint = 0
                 _restored_seed = 0
                 _restored_share = 0
+                _restored_complete = 0
         mint_count = _restored_mint
         seed_count = _restored_seed
         share_count = _restored_share
+        complete_releases = _restored_complete
     # Kill-condition watchdog: 'mint=0 for 30 days'. When no mint has EVER
     # happened (days_since_last_mint None) the clock anchors to
     # days_since_first_seed — the FIRST summon / game launch — so the kill
@@ -5011,7 +5019,7 @@ def health(request):
     share_rate = (share_count / seed_count) if seed_count > 0 else None
     return JSONResponse({
         "status": "ok",
-        "tests": 527,  # pytest count, synced at iter-27 (evolve plain-handler gate: +5 tests)
+        "tests": 572,  # pytest count, synced at iter-34 (win-proof durability: +4 tests)
         "data_persisted": data_persisted,
         "data_restored_from_snapshot": bool(
             getattr(sys.modules.get(__name__), "_SNAPSHOT_RESTORED", False)
@@ -5019,6 +5027,7 @@ def health(request):
         "restored_mint_count": _restored_mint,
         "restored_seed_count": _restored_seed,
         "restored_share_count": _restored_share,
+        "restored_complete_releases": _restored_complete,
         "snapshot_ts": getattr(sys.modules.get(__name__), "_SNAPSHOT_TS", "") or "",
         "mint_count": mint_count,
         "seed_count": seed_count,

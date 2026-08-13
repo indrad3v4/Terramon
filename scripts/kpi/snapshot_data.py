@@ -59,7 +59,10 @@ def main() -> int:
         print("snapshot_data: failed to write snapshot", file=sys.stderr)
         return 1
 
-    counters = {k: payload.get(k, 0) for k in ("mint_count", "share_count", "seed_count")}
+    counters = {
+        k: payload.get(k, 0)
+        for k in ("mint_count", "share_count", "seed_count", "complete_releases")
+    }
     print(f"snapshot_data: snapshot written to {path}")
     print(f"snapshot_data: restorable counters: {json.dumps(counters)}")
     return 0

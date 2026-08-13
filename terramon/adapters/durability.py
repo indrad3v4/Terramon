@@ -2,7 +2,8 @@
 
 Problem: railway.json declares a volume at /app/data but it is NOT
 attached in the Railway dashboard, so every redeploy wipes data/ and the
-/health counters (mint_count / share_count / seed_count) reset to 0.
+/health counters (mint_count / share_count / seed_count /
+complete_releases) reset to 0.
 That erases NSS evidence (a future real Lightning mint record) and
 confuses the kill-condition monitor.
 
@@ -23,6 +24,11 @@ source of truth; git-based backup tooling (borg/git-annex) uses
 
 No fabricated data: only the app's own real counters carried across
 infra wipes, clearly labeled.
+
+complete_releases (Lens #97: releases with final words + real geo,
+ritual PAID) is the monetised depth win — the North Star metric — and is
+now part of the restorable checkpoint, so a volume wipe can never erase
+a paid win.
 
 Design (mirrors reverse_geo.py):
   - pure stdlib, NO Reflex imports, importable in offline tests;
@@ -52,8 +58,15 @@ BOOT_SNAPSHOT_DIR = Path(
 SNAPSHOT_FILENAME = "health.json"
 # The only counters the app replays additively into /health (spec: the
 # restore is a baseline for mint/share/seed evidence; player cohorts are
-# recomputed from the memory file itself).
-RESTORE_COUNTER_KEYS = ("mint_count", "share_count", "seed_count")
+# recomputed from the memory file itself). complete_releases is the
+# monetised depth win (Lens #97: final words + real geo, ritual PAID) —
+# a paid win must survive a volume wipe, so it restores too.
+RESTORE_COUNTER_KEYS = (
+    "mint_count",
+    "share_count",
+    "seed_count",
+    "complete_releases",
+)
 
 
 def _resolve_dir(snapshot_dir: str | Path | None) -> Path:

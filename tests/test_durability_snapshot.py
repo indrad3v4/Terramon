@@ -98,6 +98,38 @@ def test_snapshot_contains_ts_key(tmp_path):
     assert isinstance(data.get("snapshot_ts"), str) and data["snapshot_ts"]
 
 
+def test_round_trip_complete_releases_counter(tmp_path):
+    """The PAID win counter (Lens #97 complete_releases) survives a wipe.
+
+    Round-trip: capture a payload that includes complete_releases=1, then
+    wipe the memory file (missing, then empty) and restore — the win must
+    come back as 1, exactly like the mint/share/seed counters.
+    """
+    payload = {
+        "mint_count": 5,
+        "share_count": 2,
+        "seed_count": 9,
+        "complete_releases": 1,
+    }
+    captured = capture_health_snapshot(payload, snapshot_dir=tmp_path)
+    assert captured is not None and captured.is_file()
+
+    # memory file MISSING == wiped volume signature
+    result = restore_counters_if_wiped(
+        tmp_path / "tma_memory.jsonl", snapshot_dir=tmp_path
+    )
+    assert result["restored"] is True
+    assert result["counts"] == payload
+    assert result["counts"]["complete_releases"] == 1
+
+    # empty memory file == wiped volume that JsonMemory already recreated
+    mem = tmp_path / "tma_memory.jsonl"
+    mem.write_text("", encoding="utf-8")
+    result = restore_counters_if_wiped(mem, snapshot_dir=tmp_path)
+    assert result["restored"] is True
+    assert result["counts"]["complete_releases"] == 1
+
+
 # ── source-level wiring guards (TMA read as TEXT, never imported) ────
 
 
