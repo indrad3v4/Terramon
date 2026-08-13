@@ -61,7 +61,12 @@ from terramon.application.game_loop import GameLoop, TurnResult
 from terramon.application.geo_tournament import GeoTournamentService
 from terramon.application.summon_service import SummonService
 from terramon.domain.progress import PlayerProgress, XP_BY_RARITY
-from terramon.domain.rarity import Rarity, lightning_mint_price
+from terramon.domain.rarity import (
+    Rarity,
+    RITUAL_RELEASE_SATS,
+    RITUAL_RELEASE_STARS,
+    lightning_mint_price,
+)
 from terramon.domain.thought_seed import ThoughtSeed
 from terramon.events.bus import EventBus
 from terramon.application.insight_engine import _scores, _THEMES
@@ -552,6 +557,20 @@ class TerramonState(rx.State):
     released_just_now: bool = False
     released_count: int = 0  # reframed win counter — released-based ("Встречено X из 5")
     complete_releases: int = 0  # depth win (Lens #97): releases WITH final words + real geo
+    # Ritual monetisation (owner directive 2026-08-13): the ACTUAL WIN —
+    # a complete release (final words + real geo) — is the paid sacred
+    # moment. Words reach the world only when the ritual settles
+    # (Lightning sacred rail / Stars), so complete_releases counts PAID
+    # wins by construction. The free path releases the creature but
+    # never persists words → never counts toward the depth win.
+    show_ritual_payment: bool = False
+    release_ritual_paid: bool = False
+    release_ritual_invoice: str = ""
+    release_ritual_ref: str = ""
+    release_ritual_qr: str = ""
+    release_ritual_auto_verify: bool = False
+    release_ritual_verify_attempts: int = 0
+    pending_words: str = ""
 
     # «Зажечь свечу» — WebLN candle ritual on a released creature's birthplace.
     # 500-sat keysend zap from the player's browser wallet (Alby extension);
@@ -1562,17 +1581,140 @@ class TerramonState(rx.State):
 
     @rx.event
     def release_creature(self):
-        """I12 v2: release via the domain CreatureAgent — the creature is
-        freed (status 'released'), its needs freeze, and the player's
-        goodbye is kept in final_words. Refreshes the released-based
-        progress + terra, then shows the release receipt."""
+        """I12 v2 + ritual monetisation (owner directive 2026-08-13).
+
+        The ACTUAL WIN — a complete release (final words + real geo) —
+        is the PAID sacred moment («монета в фонтан»). Words reach the
+        world only when the ritual settles (Lightning sacred rail via
+        Alby BOLT11, or Stars). The free path (no words / no real geo)
+        still releases the creature as a legacy release, but it never
+        persists words → never counts toward complete_releases, so the
+        depth win is monetised BY CONSTRUCTION.
+        """
         self.show_release_dialog = False
         if self.agent_evolution < 2:
             self.agent_message = "Not ready. Evolve to stage 2 first."
             return
         words = self.final_words.strip()
         self.final_words = ""
+        has_anchor = (
+            self.agent_lat not in (None, 0) and self.agent_lon not in (None, 0)
+        )
+        if not words or not has_anchor:
+            # Free legacy path — no ritual, no depth win.
+            self._do_release("", complete=False)
+            return
+        if not self.release_ritual_paid:
+            # Sacred rail: hold the words, open the ritual payment panel.
+            self.pending_words = words
+            self.show_ritual_payment = True
+            self.create_ritual_invoice()
+            return
+        self._complete_ritual_release(words)
 
+    @rx.event
+    def create_ritual_invoice(self):
+        """BOLT11 invoice for the release ritual (Alby Hub, sacred rail)."""
+        try:
+            if not _ALBY.url or not _ALBY.api_key:
+                self.release_ritual_invoice = ""
+                self.agent_message = (
+                    "🪙 Ритуал: Lightning не настроен — используй Stars "
+                    f"({RITUAL_RELEASE_STARS} ⭐)."
+                )
+                return
+            price = RITUAL_RELEASE_SATS
+            req = _ALBY.create_payment(
+                price, f"Terramon release ritual · {self.pending_words[:40]}"
+            )
+            self.release_ritual_invoice = req.destination
+            self.release_ritual_ref = req.verification_ref
+            try:
+                self.release_ritual_qr = _qr_data_uri(req.destination)
+            except Exception:
+                self.release_ritual_qr = ""
+            self.release_ritual_auto_verify = True
+            self.release_ritual_verify_attempts = 0
+            self.agent_message = (
+                f"⚡ Ритуал отпускания: {price} sats. Оплати — и слова уйдут в мир."
+            )
+        except Exception as e:
+            log.error(f"ritual invoice failed: {e}", exc_info=True)
+            self.agent_message = f"⚡ Инвойс не создан: {getattr(e, 'message', e)}"
+
+    @rx.event
+    def verify_release_ritual(self, _tick=None):
+        """Auto-verify poller + manual button: on settle the ritual fires.
+
+        Mirrors the lightning gate poller (rx.moment passes datetime,
+        swallowed by _tick). While polling, agent_message is never
+        touched — the KPI probe parses the «⚡ Ритуал отпускания:»
+        marker within seconds of the release click.
+        """
+        if not self.release_ritual_ref or not _ALBY.url:
+            if self.release_ritual_auto_verify:
+                self.release_ritual_auto_verify = False
+                self.release_ritual_verify_attempts = 0
+            return
+        try:
+            from terramon.ports.payment_port import PaymentRequest, PaymentMethod
+            req = PaymentRequest(
+                id=self.release_ritual_ref,
+                method=PaymentMethod.LIGHTNING,
+                amount_sats=RITUAL_RELEASE_SATS,
+                destination=self.release_ritual_invoice,
+                memo="terramon",
+                verification_ref=self.release_ritual_ref,
+            )
+            if _ALBY.verify_payment(req):
+                self.release_ritual_paid = True
+                self.release_ritual_auto_verify = False
+                self.release_ritual_verify_attempts = 0
+                words = self.pending_words
+                self.show_ritual_payment = False
+                self._complete_ritual_release(words)
+            else:
+                self.release_ritual_verify_attempts += 1
+                if not self.release_ritual_auto_verify:
+                    self.agent_message = "⏳ Ритуал не подтверждён — проверь, что инвойс оплачен."
+        except Exception as e:
+            log.warning(f"ritual verify failed: {e}")
+            self.agent_message = f"⚡ Проверка не удалась: {getattr(e, 'message', e)}"
+
+    @rx.event
+    def pay_ritual_stars(self):
+        """Stars rail for the ritual — optimistic record (openInvoice has
+        no server callback in this MVP; mirrors the Stars mint)."""
+        self.release_ritual_paid = True
+        self.release_ritual_auto_verify = False
+        words = self.pending_words
+        self.show_ritual_payment = False
+        self._complete_ritual_release(words)
+        return rx.call_script(
+            f"if(window.Telegram?.WebApp?.openInvoice)Telegram.WebApp.openInvoice('{_STARS_INVOICE_URL}');"
+        )
+
+    @rx.event
+    def release_without_ritual(self):
+        """Free legacy path — the creature goes free; words stay with the player."""
+        self.show_ritual_payment = False
+        self.release_ritual_auto_verify = False
+        self.release_ritual_verify_attempts = 0
+        self.pending_words = ""
+        self._do_release("", complete=False)
+
+    def _complete_ritual_release(self, words: str) -> None:
+        """The paid ritual fires: words reach the world, the depth win counts."""
+        self._do_release(words, complete=True)
+
+    def _do_release(self, words: str, complete: bool) -> None:
+        """Shared release core.
+
+        complete=True — the ritual was paid: final words are persisted,
+        so the release counts toward complete_releases (the monetised
+        depth win). complete=False — a free legacy release that never
+        counts toward the depth win.
+        """
         # Domain release — liberation, not death (needs frozen, words kept)
         try:
             _agent = CreatureAgent(
@@ -1598,15 +1740,17 @@ class TerramonState(rx.State):
 
         # Depth win (prism roast, Lens #97): counts ONLY releases WITH
         # final words AND a real geo anchor — one thought lived all the
-        # way through beats five archetype checkmarks.
-        try:
-            _complete = _LOOP.progress.record_complete_release(
-                words, self.agent_lat, self.agent_lon
-            )
-            if _complete:
-                self.complete_releases = int(_LOOP.progress.complete_releases)
-        except Exception as e:
-            log.warning(f"record_complete_release failed: {e}")
+        # way through beats five archetype checkmarks. Only reachable
+        # via the PAID ritual (complete=True).
+        if complete:
+            try:
+                _complete = _LOOP.progress.record_complete_release(
+                    words, self.agent_lat, self.agent_lon
+                )
+                if _complete:
+                    self.complete_releases = int(_LOOP.progress.complete_releases)
+            except Exception as e:
+                log.warning(f"record_complete_release failed: {e}")
 
         # Publish CreatureReleased event (global map + Nostr, when configured)
         try:
@@ -1660,10 +1804,16 @@ class TerramonState(rx.State):
         except Exception as e:
             log.warning(f"Failed to update seed status: {e}")
 
-        # Persist the release (depth win, Lens #97): keep final words on the
-        # seed so complete_releases survives a restart.
+        # Persist the release: ritual persists final words (depth win,
+        # Lens #97 — complete_releases survives a restart); the free
+        # legacy path persists status only, so it never counts.
         try:
-            _MEMORY.update_seed(self.agent, self.thought, status="released", final_words=words)
+            if complete:
+                _MEMORY.update_seed(
+                    self.agent, self.thought, status="released", final_words=words
+                )
+            else:
+                _MEMORY.update_seed(self.agent, self.thought, status="released")
         except Exception as e:
             log.warning(f"Release persistence failed: {e}")
 
@@ -3754,6 +3904,132 @@ def release_dialog() -> rx.Component:
     )
 
 
+def ritual_payment_panel() -> rx.Component:
+    """🪙 Ритуал Отпускания — the ACTUAL WIN is the paid sacred moment.
+
+    Shown when a release carries final words + a real geo anchor: the
+    words reach the world only when the coin falls in the fountain.
+    Lightning is the sacred rail (BOLT11 via Alby, RITUAL_RELEASE_SATS);
+    Stars is the fallback rail. «Отпустить без ритуала» frees the
+    creature as a legacy release that never counts toward the depth win.
+    """
+    return rx.cond(
+        TerramonState.show_ritual_payment,
+        rx.box(
+            rx.vstack(
+                rx.text("🪙", font_size="2.5em"),
+                rx.heading("Ритуал Отпускания", size="5", color="#e5e7eb",
+                           font_weight="bold"),
+                rx.text(
+                    "Твои слова дойдут до мира, когда монета упадёт в фонтан.",
+                    font_size="0.75em", color="#9ca3af",
+                    text_align="center", max_width="300px",
+                ),
+                rx.cond(
+                    TerramonState.release_ritual_invoice != "",
+                    rx.vstack(
+                        rx.cond(
+                            TerramonState.release_ritual_qr != "",
+                            rx.image(
+                                src=TerramonState.release_ritual_qr,
+                                width="160px", height="160px",
+                                border_radius="8px", background="#fff",
+                                padding="4px",
+                            ),
+                            rx.fragment(),
+                        ),
+                        rx.text(
+                            "Pay ⚡ " + str(RITUAL_RELEASE_SATS) + " sats with any Lightning wallet",
+                            font_size="0.75em", color="#fbbf24", text_align="center",
+                        ),
+                        rx.text(
+                            TerramonState.release_ritual_invoice,
+                            font_size="0.55em", color="#6b7280", text_align="center",
+                            max_width="280px", word_break="break-all",
+                        ),
+                        rx.button(
+                            "📋 Copy BOLT11",
+                            on_click=rx.set_clipboard(TerramonState.release_ritual_invoice),
+                            variant="surface", size="1", color_scheme="gray",
+                            width="100%",
+                        ),
+                        rx.cond(
+                            TerramonState.release_ritual_auto_verify,
+                            rx.text(
+                                "⏳ Auto-checking payment… "
+                                + TerramonState.release_ritual_verify_attempts.to_string()
+                                + "/30",
+                                font_size="0.7em", color="#9ca3af",
+                            ),
+                            rx.button(
+                                "✅ I've paid — verify",
+                                on_click=TerramonState.verify_release_ritual,
+                                variant="solid", size="2", color_scheme="yellow",
+                                width="100%", _hover={"transform": "scale(1.02)"},
+                            ),
+                        ),
+                        # Hidden periodic poller — mirrors the lightning gate:
+                        # the cond gate unmounts it the moment auto-verify stops.
+                        rx.cond(
+                            TerramonState.release_ritual_auto_verify,
+                            rx.moment(
+                                interval=6000,
+                                on_change=TerramonState.verify_release_ritual,
+                                display="none",
+                            ),
+                            rx.fragment(),
+                        ),
+                        spacing="2",
+                        align="center",
+                        width="100%",
+                    ),
+                    rx.text(
+                        "⚡ Lightning не настроен — используй Stars ниже.",
+                        font_size="0.7em", color="#9ca3af", text_align="center",
+                    ),
+                ),
+                rx.text("— or —", font_size="0.65em", color="#52525b"),
+                rx.button(
+                    rx.hstack(
+                        rx.text("⭐", font_size="1em"),
+                        rx.text(
+                            "Оплатить ритуал · " + str(RITUAL_RELEASE_STARS) + " Stars",
+                            font_size="0.8em",
+                        ),
+                        spacing="1",
+                    ),
+                    on_click=TerramonState.pay_ritual_stars,
+                    variant="solid", size="2", color_scheme="amber",
+                    width="100%", _hover={"transform": "scale(1.02)"},
+                ),
+                rx.button(
+                    "💨 Отпустить без ритуала (слова останутся с тобой)",
+                    on_click=TerramonState.release_without_ritual,
+                    variant="soft", size="2", color_scheme="gray",
+                    width="100%",
+                ),
+                spacing="3",
+                align="center",
+                padding="2em",
+                background="linear-gradient(145deg, #1a1a2e 0%, #141418 100%)",
+                border="1px solid #fbbf2466",
+                border_radius="20px",
+                max_width="340px",
+                width="100%",
+            ),
+            position="fixed",
+            top="0", left="0", right="0", bottom="0",
+            background="rgba(0,0,0,0.8)",
+            display="flex",
+            align_items="center",
+            justify_content="center",
+            z_index="960",
+            padding="1em",
+        ),
+        rx.fragment(),
+    )
+
+
 def index() -> rx.Component:
     """GameBoy-style single-screen TMA. Everything visible at once, no scrolling.
     Three zones: TOP (creature), MIDDLE (stats+input), BOTTOM (nav).
@@ -3765,6 +4041,8 @@ def index() -> rx.Component:
         tutorial_overlay(),
         # I12: Release confirmation dialog
         release_dialog(),
+        # 🪙 Ritual monetisation: the ACTUAL WIN's payment panel
+        ritual_payment_panel(),
         # Outer container: fixed height = 100vh, no overflow
         rx.box(
             rx.vstack(
@@ -4469,7 +4747,7 @@ def health(request):
     share_rate = (share_count / seed_count) if seed_count > 0 else None
     return JSONResponse({
         "status": "ok",
-        "tests": 513,  # pytest count, synced at depth-win persistence fix (iter-24: was miscounted 519; real 513 after +2 persistence tests)
+        "tests": 522,  # pytest count, synced at ritual monetisation (iter-26: +9 ritual tests)
         "data_persisted": data_persisted,
         "data_restored_from_snapshot": bool(
             getattr(sys.modules.get(__name__), "_SNAPSHOT_RESTORED", False)

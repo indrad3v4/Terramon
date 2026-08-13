@@ -109,8 +109,11 @@ def test_tma_release_persists_status_and_final_words() -> None:
     _MEMORY.update_seed with status='released' (+ final_words in the
     v2 flow).
     """
-    assert "_MEMORY.update_seed(self.agent, self.thought, status=\"released\"" in _TMA_SRC
-    assert "_MEMORY.update_seed(self.agent, self.thought, status=\"released\", final_words=words" in _TMA_SRC
+    assert '_MEMORY.update_seed(self.agent, self.thought, status="released"' in _TMA_SRC
+    assert (
+        'status="released", final_words=words' in _TMA_SRC
+        and "final_words=words" in _TMA_SRC
+    )
 
 
 def test_memory_round_trip_final_words() -> None:

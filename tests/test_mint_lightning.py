@@ -124,9 +124,10 @@ def test_lightning_mint_price_import_wired(source):
     """The rarity import line carries lightning_mint_price so the
     JIT-floor wiring in mint_lightning cannot silently regress."""
     assert (
-        "from terramon.domain.rarity import Rarity, lightning_mint_price"
-        in source
-    ), "terramon_tma.py import line missing lightning_mint_price"
+        "from terramon.domain.rarity import (" in source
+        and "lightning_mint_price" in source
+        and "Rarity" in source
+    ), "terramon_tma.py import missing lightning_mint_price/Rarity"
 
 
 def test_card_lightning_mint_button(source):
@@ -232,8 +233,8 @@ def test_gate_keeps_lightning_wiring(source):
 
 def test_health_tests_count(source):
     """(e) /health reports the synced pytest count."""
-    assert '"tests": 513' in source, (
-        "health endpoint pytest count not synced to 513"
+    assert '"tests": 522' in source, (
+        "health endpoint pytest count not synced to 522"
     )
 
 

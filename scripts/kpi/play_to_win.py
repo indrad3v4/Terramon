@@ -708,18 +708,21 @@ def run_depth_release_probe(browser, candidate_label="depth-release"):
     dialog confirm) with final words 'Прощай, страх. Свободен.' + real
     geo (capture_location '⟳' BEFORE summon, same as the rounds).
 
-    The authoritative signal is the /health complete_releases delta
-    (0 -> 1): release_creature() persists status='released' + final_words
-    via _MEMORY.update_seed, and the progress counter increments only
-    when final words are non-empty AND lat/lon != 0 (record_complete_
-    release). UI receipt markers ('✓ Отпущено:' / the quoted final words
-    / 'отпустил свою мысль' in the body after confirm) are secondary
-    evidence. KPI policy: NEVER clicks any mint button (Contract 3) —
-    this probe touches only the care/release path. Honest note: creates
-    exactly ONE real released seed on prod per run.
+    RITUAL GATE (owner directive 2026-08-13 — monetisation on the actual
+    win): with final words + real geo the confirm opens the PAID ritual
+    panel («Ритуал Отпускания») instead of completing the release. The
+    monetised win-path proof = the «⚡ Ритуал отпускания:» invoice
+    marker in agent_message (BOLT11 created on the Alby node). The probe
+    NEVER pays (KPI Contract 3): it closes via «Отпустить без ритуала»
+    (free legacy release — status released, words NOT persisted, so
+    complete_releases stays 0 honestly). Settle awaits a real player:
+    report 'ritual_invoice_created=true, settle awaits real payment'.
     """
     depth_probe = {"probe_thought": None, "released_clicked": False,
-                   "words_entered": False, "receipt_seen": False,
+                   "words_entered": False, "ritual_panel_seen": False,
+                   "ritual_invoice_marker": False,
+                   "ritual_free_release_clicked": False,
+                   "receipt_seen": False,
                    "receipt_snippet": None, "complete_before": None,
                    "complete_after": None, "complete_delta": None,
                    "error": None}
@@ -823,11 +826,14 @@ def run_depth_release_probe(browser, candidate_label="depth-release"):
             print(f"[depth-probe:{candidate_label}] dialog fill/confirm "
                   f"failed (not fatal): {str(e)[:120]}")
         # Receipt evidence (secondary) + the authoritative /health delta.
-        # The receipt markers are session-only UI: '✓ Отпущено:' + the
-        # quoted final words + 'отпустил свою мысль' render ONLY right
-        # after release_creature (the always-visible 'Отпущено в мир: N'
-        # progress line is NOT a receipt proof — it renders on every load).
+        # Ritual gate: with words + geo the confirm opened the PAID panel
+        # instead of completing — the monetised win-path proof is the
+        # «⚡ Ритуал отпускания:» invoice marker (BOLT11 on the Alby node).
         receipt_body = probe_page.locator("body").inner_text()
+        depth_probe["ritual_panel_seen"] = "Ритуал Отпускания" in receipt_body
+        depth_probe["ritual_invoice_marker"] = (
+            "⚡ Ритуал отпускания:" in receipt_body
+        )
         depth_probe["receipt_seen"] = (
             "✓ Отпущено" in receipt_body
             or '"Прощай, страх. Свободен."' in receipt_body
@@ -835,15 +841,24 @@ def run_depth_release_probe(browser, candidate_label="depth-release"):
         )
         depth_probe["receipt_snippet"] = re.sub(
             r"\s+", " ", receipt_body).strip()[:300]
+        # Close the ritual panel via the free legacy path (NEVER pay).
+        free_btn = probe_page.locator(
+            "button:has-text('Отпустить без ритуала')").first
+        if free_btn.count() > 0 and free_btn.is_visible():
+            free_btn.click(timeout=4000)
+            depth_probe["ritual_free_release_clicked"] = True
+            probe_page.wait_for_timeout(1500)
         depth_probe["complete_after"] = fetch_health_full().get(
             "complete_releases")
         if isinstance(depth_probe["complete_before"], int) and isinstance(
                 depth_probe["complete_after"], int):
             depth_probe["complete_delta"] = (
                 depth_probe["complete_after"] - depth_probe["complete_before"])
-        print(f"[depth-probe:{candidate_label}] receipt_seen="
-              f"{depth_probe['receipt_seen']}, complete_releases: "
-              f"before={depth_probe['complete_before']} "
+        print(f"[depth-probe:{candidate_label}] ritual_panel_seen="
+              f"{depth_probe['ritual_panel_seen']}, "
+              f"ritual_invoice_marker={depth_probe['ritual_invoice_marker']}, "
+              f"receipt_seen={depth_probe['receipt_seen']}, "
+              f"complete_releases: before={depth_probe['complete_before']} "
               f"after={depth_probe['complete_after']} "
               f"delta={depth_probe['complete_delta']}")
         print(f"[depth-probe:{candidate_label}] "

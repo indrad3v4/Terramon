@@ -64,6 +64,27 @@ def lightning_mint_price(stars_price: int) -> int:
         return 0
     return max(int(stars_price), LIGHTNING_MIN_MINT_SATS)
 
+
+# Release ritual — the ACTUAL WIN is the paid sacred moment (owner
+# directive 2026-08-13: "monetisation to actual win in game"). The
+# depth-win release (final words + real geo → complete_releases) is
+# the ritual: words reach the world only when the coin falls in the
+# fountain. Lightning is the "sacred rail" (BOLT11 >= JIT floor), so
+# the ritual is priced above the Stars rail — same lift rule as mint.
+RITUAL_RELEASE_STARS = 5           # Telegram Stars rail
+RITUAL_RELEASE_SATS = 3000         # Lightning rail (>= Alby JIT floor 2501)
+
+
+def ritual_release_price(stars_price: int = RITUAL_RELEASE_STARS) -> int:
+    """Map the ritual Stars price to the Lightning ritual price in sats.
+
+    Free stays free; paid rituals are lifted to at least
+    LIGHTNING_MIN_MINT_SATS so the Alby node can settle the BOLT11.
+    """
+    if stars_price <= 0:
+        return 0
+    return max(int(stars_price), LIGHTNING_MIN_MINT_SATS)
+
 # Dirichlet prior — base probability vector BEFORE seeing thought content.
 # [common, uncommon, rare, legendary] — the "default odds" of any summon.
 # The thought's rarity-score shifts probability mass toward rarer tiers.
