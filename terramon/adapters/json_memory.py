@@ -295,6 +295,9 @@ class JsonMemory(MemoryPort):
         final_words: str | None = None,
         minted: bool | None = None,
         minted_at: str | None = None,
+        lat: float | None = None,
+        lon: float | None = None,
+        place_name: str | None = None,
     ) -> bool:
         """In-place field update of the newest record matching (agent, thought).
 
@@ -305,6 +308,9 @@ class JsonMemory(MemoryPort):
         complete releases. M7 mint loop: ``minted``/``minted_at`` persist the
         real mint record (the creature became a collectible). Returns True
         when a matching record was updated.
+        iter-29 re-anchor: optional lat/lon/place_name persist a later geo
+        re-capture on the seed so an unanchored creature can still qualify
+        for the complete-release win.
         """
         if not self.path.exists():
             return False
@@ -333,6 +339,12 @@ class JsonMemory(MemoryPort):
                     record["minted"] = bool(minted)
                 if minted_at is not None:
                     record["minted_at"] = minted_at
+                if lat is not None:
+                    record["lat"] = lat
+                if lon is not None:
+                    record["lon"] = lon
+                if place_name is not None:
+                    record["place_name"] = place_name
                 lines[idx] = json.dumps(record, ensure_ascii=False)
                 changed = True
                 break

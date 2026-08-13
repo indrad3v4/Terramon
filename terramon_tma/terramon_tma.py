@@ -692,6 +692,22 @@ class TerramonState(rx.State):
         else:
             self.geo_status = "granted"
             self.geo_lat, self.geo_lon = lat, lon
+        # iter-29 re-anchor: a creature born unanchored (geo denied at
+        # first summon) must still be able to reach the paid ritual — ⟳
+        # now updates the CURRENT creature's anchor and persists it to
+        # the seed, so release_creature's has_anchor gate passes. The
+        # first-summon deferral is skipped (pending_thought set, agent
+        # empty).
+        if self.agent and not self.pending_thought:
+            self.agent_lat, self.agent_lon = lat, lon
+            self.place = self.geo_place or f"{lat:.2f}, {lon:.2f}"
+            try:
+                _MEMORY.update_seed(
+                    self.agent, self.thought,
+                    lat=lat, lon=lon, place_name=self.geo_place or "",
+                )
+            except Exception as e:
+                log.warning(f"Re-anchor persist failed: {e}")
 
     @rx.event
     def capture_location(self):
@@ -3951,6 +3967,19 @@ def release_dialog() -> rx.Component:
                     font_size="0.7em", color="#6b7280",
                     text_align="center", max_width="300px",
                     font_style="italic",
+                ),
+                rx.cond(
+                    (TerramonState.agent_lat == 0.0) | (TerramonState.agent_lon == 0.0),
+                    rx.hstack(
+                        rx.text("📍 Нужна геолокация для ритуала",
+                                font_size="0.7em", color="#fbbf24"),
+                        rx.button("⟳", on_click=TerramonState.capture_location,
+                                  size="1", variant="ghost", color_scheme="amber",
+                                  font_size="0.9em"),
+                        spacing="2", align="center", width="100%",
+                        justify="center",
+                    ),
+                    rx.fragment(),
                 ),
                 rx.hstack(
                     rx.button(
