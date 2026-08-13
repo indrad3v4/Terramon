@@ -821,13 +821,17 @@ def run_depth_release_probe(browser, candidate_label="depth-release"):
                   "(show_release) not visible after 40s poll — "
                   "evolution stage < 2? (not fatal)")
         # Final words in the dialog textarea + confirm (.last = dialog).
-        # POLL for the textarea (up to 10s): the dialog renders only after
+        # POLL for the textarea (up to 30s): the dialog renders only after
         # the show_release delta round-trips over /_event, so a fixed
         # 1200ms wait races the async delta (same root cause as above).
+        # 30s mirrors the 40s release-button poll: evolve() latency is
+        # VARIABLE (0.8s .. >15s documented), so the delta can lag the
+        # release click by seconds. On timeout, dump DOM diagnostics
+        # instead of failing silently (self-diagnosing probe).
         try:
             words_entered = False
             ta_poll_start = time.monotonic()
-            ta_deadline = ta_poll_start + 10.0
+            ta_deadline = ta_poll_start + 30.0
             while time.monotonic() < ta_deadline:
                 words_ta = probe_page.locator("textarea").first
                 if words_ta.count() > 0 and words_ta.is_visible():
@@ -837,9 +841,53 @@ def run_depth_release_probe(browser, candidate_label="depth-release"):
                     print(f"[depth-probe:{candidate_label}] dialog "
                           f"textarea appeared after "
                           f"{time.monotonic() - ta_poll_start:.1f}s "
-                          f"(10s poll)")
+                          f"(30s poll)")
                     break
                 probe_page.wait_for_timeout(1000)
+            if not words_entered:
+                # Self-diagnosing failure: dump WHY no visible textarea —
+                # dialog-not-open vs textarea-hidden vs async delta lag
+                # (mirrors the wire-diag that proved the app is fine).
+                print(f"[depth-probe:{candidate_label}] dialog textarea "
+                      "NOT visible after 30s poll — diagnostics:")
+                try:
+                    all_tas = probe_page.locator("textarea")
+                    print(f"[depth-probe:{candidate_label}]   total "
+                          f"<textarea> count: {all_tas.count()}")
+                    for _ti in range(all_tas.count()):
+                        ta_i = all_tas.nth(_ti)
+                        try:
+                            ta_vis = ta_i.is_visible()
+                        except Exception:
+                            ta_vis = "n/a"
+                        try:
+                            ta_box = ta_i.bounding_box()
+                        except Exception:
+                            ta_box = "n/a"
+                        try:
+                            ta_ph = ta_i.get_attribute("placeholder")
+                        except Exception:
+                            ta_ph = "n/a"
+                        print(f"[depth-probe:{candidate_label}]   textarea "
+                              f"[{_ti}] visible={ta_vis} "
+                              f"bounding_box={ta_box} "
+                              f"placeholder={ta_ph!r}")
+                    all_ins = probe_page.locator("input")
+                    print(f"[depth-probe:{candidate_label}]   total "
+                          f"<input> count: {all_ins.count()}")
+                    body_txt = probe_page.locator("body").inner_text()
+                    dialog_text_present = (
+                        "Существо останется жить" in body_txt)
+                    print(f"[depth-probe:{candidate_label}]   dialog text "
+                          f"'Существо останется жить' in body: "
+                          f"{dialog_text_present}")
+                    body_snippet = re.sub(
+                        r"\s+", " ", body_txt).strip()[:200]
+                    print(f"[depth-probe:{candidate_label}]   body snippet: "
+                          f"{body_snippet}")
+                except Exception as diag_e:
+                    print(f"[depth-probe:{candidate_label}] diagnostics "
+                          f"failed: {str(diag_e)[:120]}")
             if words_entered:
                 probe_page.wait_for_timeout(1000)
                 # Robust confirm click: '💨 Отпустить' matches BOTH the
@@ -877,7 +925,7 @@ def run_depth_release_probe(browser, candidate_label="depth-release"):
         # Ritual gate: with words + geo the confirm opened the PAID panel
         # instead of completing — the monetised win-path proof is the
         # «⚡ Ритуал отпускания:» invoice marker (BOLT11 on the Alby node).
-        # POLL the body for the ritual markers (up to 12s, every ~1s)
+        # POLL the body for the ritual markers (up to 20s, every ~1s)
         # before reading receipt_body: create_ritual_invoice() makes an
         # HTTP call to the Alby Hub, so the marker can lag the confirm
         # click by seconds. Non-fatal — on timeout the body is still read
@@ -885,7 +933,7 @@ def run_depth_release_probe(browser, candidate_label="depth-release"):
         ritual_markers = ("Ритуал Отпускания", "⚡ Ритуал отпускания:",
                           "✓ Отпущено")
         marker_poll_start = time.monotonic()
-        marker_deadline = marker_poll_start + 12.0
+        marker_deadline = marker_poll_start + 20.0
         receipt_body = ""
         while time.monotonic() < marker_deadline:
             receipt_body = probe_page.locator("body").inner_text()
@@ -893,7 +941,7 @@ def run_depth_release_probe(browser, candidate_label="depth-release"):
                 print(f"[depth-probe:{candidate_label}] ritual marker "
                       f"appeared after "
                       f"{time.monotonic() - marker_poll_start:.1f}s "
-                      f"(12s poll)")
+                      f"(20s poll)")
                 break
             probe_page.wait_for_timeout(1000)
         depth_probe["ritual_panel_seen"] = "Ритуал Отпускания" in receipt_body
