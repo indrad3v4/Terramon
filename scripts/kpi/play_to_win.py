@@ -779,49 +779,97 @@ def run_depth_release_probe(browser, candidate_label="depth-release"):
         if care_tab.count() > 0 and care_tab.is_visible():
             care_tab.click(timeout=4000)
             probe_page.wait_for_timeout(1500)
-        # '✦ EVOLVE' TWICE (evolve_agent: no probability gate, cap 2)
-        # -> agent_evolution stage 2, which unlocks the release button.
-        for evo in range(2):
+        # '✦ EVOLVE' to stage 2, which unlocks the release button
+        # (evolve_agent: no probability gate, cap 2 — extra clicks are
+        # harmless server-side).
+        # NOTE (iter-33 prod evidence): evolve() is LLM-backed and its
+        # latency is VARIABLE (0.8s in the wire-diag, 14.1s in run 1,
+        # >15s in run 2), and Reflex 0.9.8 applies deltas asynchronously
+        # over POST /_event. A fixed 2-click + fixed poll therefore still
+        # misses the gate. Robust pattern: keep clicking '✦ EVOLVE'
+        # (capped at 2, so re-clicks only regenerate the evolve message)
+        # while POLLING for the release button up to a 40s deadline.
+        release_poll_start = time.monotonic()
+        release_deadline = release_poll_start + 40.0
+        released_clicked = False
+        evo_attempts = 0
+        while time.monotonic() < release_deadline:
+            release_btn = probe_page.locator(
+                "button:has-text('💨 Отпустить')").first
+            if release_btn.count() > 0 and release_btn.is_visible():
+                release_btn.click(timeout=4000)
+                depth_probe["released_clicked"] = True
+                released_clicked = True
+                print(f"[depth-probe:{candidate_label}] clicked "
+                      "'💨 Отпустить' (show_release dialog opened) — "
+                      f"release button appeared after "
+                      f"{time.monotonic() - release_poll_start:.1f}s "
+                      f"(40s poll, {evo_attempts} evolve retries)")
+                break
+            # Gate not open yet — nudge evolution (harmless if already 2).
             evolve_btn = probe_page.locator(
                 "button:has-text('✦ EVOLVE')").first
-            if evolve_btn.count() > 0 and evolve_btn.is_visible():
+            if (evolve_btn.count() > 0 and evolve_btn.is_visible()
+                    and evo_attempts < 4):
                 evolve_btn.click(timeout=4000)
+                evo_attempts += 1
                 print(f"[depth-probe:{candidate_label}] clicked "
-                      f"'✦ EVOLVE' ({evo + 1}/2)")
-                probe_page.wait_for_timeout(1200)
-            else:
-                print(f"[depth-probe:{candidate_label}] '✦ EVOLVE' not "
-                      f"visible on attempt {evo + 1} (not fatal)")
-                break
-        # show_release: the care-panel '💨 Отпустить' (.first — the dialog
-        # confirm renders the SAME label, so after the dialog opens we
-        # click .last = the dialog confirm for the actual release).
-        release_btn = probe_page.locator(
-            "button:has-text('💨 Отпустить')").first
-        if release_btn.count() > 0 and release_btn.is_visible():
-            release_btn.click(timeout=4000)
-            depth_probe["released_clicked"] = True
-            print(f"[depth-probe:{candidate_label}] clicked "
-                  "'💨 Отпустить' (show_release dialog opened)")
-            probe_page.wait_for_timeout(1200)
-        else:
+                      f"'✦ EVOLVE' (retry {evo_attempts})")
+            probe_page.wait_for_timeout(3000)
+        if not released_clicked:
             print(f"[depth-probe:{candidate_label}] '💨 Отпустить' "
-                  "(show_release) not visible — evolution stage < 2? "
-                  "(not fatal)")
-        # Final words in the dialog textarea + confirm (.last = dialog)
+                  "(show_release) not visible after 40s poll — "
+                  "evolution stage < 2? (not fatal)")
+        # Final words in the dialog textarea + confirm (.last = dialog).
+        # POLL for the textarea (up to 10s): the dialog renders only after
+        # the show_release delta round-trips over /_event, so a fixed
+        # 1200ms wait races the async delta (same root cause as above).
         try:
-            words_ta = probe_page.locator("textarea").first
-            if words_ta.count() > 0 and words_ta.is_visible():
-                words_ta.fill("Прощай, страх. Свободен.")
-                depth_probe["words_entered"] = True
+            words_entered = False
+            ta_poll_start = time.monotonic()
+            ta_deadline = ta_poll_start + 10.0
+            while time.monotonic() < ta_deadline:
+                words_ta = probe_page.locator("textarea").first
+                if words_ta.count() > 0 and words_ta.is_visible():
+                    words_ta.fill("Прощай, страх. Свободен.")
+                    depth_probe["words_entered"] = True
+                    words_entered = True
+                    print(f"[depth-probe:{candidate_label}] dialog "
+                          f"textarea appeared after "
+                          f"{time.monotonic() - ta_poll_start:.1f}s "
+                          f"(10s poll)")
+                    break
                 probe_page.wait_for_timeout(1000)
-                confirm_btn = probe_page.locator(
-                    "button:has-text('💨 Отпустить')").last
-                if confirm_btn.count() > 0 and confirm_btn.is_visible():
-                    confirm_btn.click(timeout=4000)
+            if words_entered:
+                probe_page.wait_for_timeout(1000)
+                # Robust confirm click: '💨 Отпустить' matches BOTH the
+                # care-panel button (DOM-later, BEHIND the modal overlay —
+                # covered, never actionable) and the dialog confirm (DOM-
+                # first, on top). Playwright's .click() on a covered element
+                # waits out the full timeout, so try each candidate with
+                # click(trial=True) (actionability check only — visible,
+                # stable, receives events) and click the first that passes.
+                # This is order-independent and survives DOM reordering.
+                confirm_clicked = False
+                confirm_loc = probe_page.locator(
+                    "button:has-text('💨 Отпустить')")
+                for _i in range(confirm_loc.count()):
+                    candidate = confirm_loc.nth(_i)
+                    if candidate.count() == 0 or not candidate.is_visible():
+                        continue
+                    try:
+                        candidate.click(trial=True, timeout=2000)
+                    except Exception:
+                        continue  # covered / not actionable — try next
+                    candidate.click(timeout=4000)
+                    confirm_clicked = True
+                    break
+                if confirm_clicked:
                     print(f"[depth-probe:{candidate_label}] confirm "
                           "'💨 Отпустить' clicked (release_creature)")
-                    probe_page.wait_for_timeout(2000)
+                else:
+                    print(f"[depth-probe:{candidate_label}] no actionable "
+                          "'💨 Отпустить' confirm button found (not fatal)")
         except Exception as e:
             print(f"[depth-probe:{candidate_label}] dialog fill/confirm "
                   f"failed (not fatal): {str(e)[:120]}")
@@ -829,7 +877,25 @@ def run_depth_release_probe(browser, candidate_label="depth-release"):
         # Ritual gate: with words + geo the confirm opened the PAID panel
         # instead of completing — the monetised win-path proof is the
         # «⚡ Ритуал отпускания:» invoice marker (BOLT11 on the Alby node).
-        receipt_body = probe_page.locator("body").inner_text()
+        # POLL the body for the ritual markers (up to 12s, every ~1s)
+        # before reading receipt_body: create_ritual_invoice() makes an
+        # HTTP call to the Alby Hub, so the marker can lag the confirm
+        # click by seconds. Non-fatal — on timeout the body is still read
+        # once and the evidence fields are recorded honestly as before.
+        ritual_markers = ("Ритуал Отпускания", "⚡ Ритуал отпускания:",
+                          "✓ Отпущено")
+        marker_poll_start = time.monotonic()
+        marker_deadline = marker_poll_start + 12.0
+        receipt_body = ""
+        while time.monotonic() < marker_deadline:
+            receipt_body = probe_page.locator("body").inner_text()
+            if any(m in receipt_body for m in ritual_markers):
+                print(f"[depth-probe:{candidate_label}] ritual marker "
+                      f"appeared after "
+                      f"{time.monotonic() - marker_poll_start:.1f}s "
+                      f"(12s poll)")
+                break
+            probe_page.wait_for_timeout(1000)
         depth_probe["ritual_panel_seen"] = "Ритуал Отпускания" in receipt_body
         depth_probe["ritual_invoice_marker"] = (
             "⚡ Ритуал отпускания:" in receipt_body

@@ -112,6 +112,28 @@ _LOCATION_JS = '''(async () => {
 })()'''
 
 
+# ── Stars ritual rail (payment-gated, cf. nikandr-surkov/telegram-mini-app-
+# stars-payments OSS reference): openInvoice callback → 'paid' | 'cancelled'
+# | 'failed' | 'unavailable'. The reward (complete_releases) is granted
+# ONLY in the 'paid' branch — never optimistically on button click. The
+# invoice URL is injected at call time (token __INVOICE_URL__) so
+# TERRAMON_STARS_INVOICE_URL is honoured.
+_RITUAL_STARS_JS = '''(async () => {
+  const tg = window.Telegram?.WebApp;
+  if (!tg || !tg.openInvoice) return 'unavailable';
+  return await new Promise((resolve) => {
+    try {
+      tg.openInvoice('__INVOICE_URL__', (status) => resolve(
+        status === 'paid' ? 'paid' :
+        (status === 'cancelled' ? 'cancelled' : 'failed')
+      ));
+    } catch (e) {
+      resolve('unavailable');
+    }
+  });
+})()'''
+
+
 # ── Player identity capture: read Telegram.WebApp.initData (raw, signed) ──
 # Runs on every app open (load_terra). Empty string when not inside a TMA —
 # the anon fallback path, never a crash. The raw string is verified server-side
@@ -263,7 +285,12 @@ if not _BOT_TOKEN:
 # from @BotFather (BotFather → Settings → Payments → Stars). Do NOT invent
 # a URL: until then buy_stars/mint_creature keep minting optimistically and
 # the guarded openInvoice simply no-ops when Telegram.WebApp is absent.
-_STARS_INVOICE_URL = "https://t.me/terramon_bot/TERRAMON_STAR_INVOICE"
+# Env-overridable (TERRAMON_STARS_INVOICE_URL) — the release ritual's
+# payment-gated Stars rail reads the same constant.
+_STARS_INVOICE_URL = os.environ.get(
+    "TERRAMON_STARS_INVOICE_URL",
+    "https://t.me/terramon_bot/TERRAMON_STAR_INVOICE",
+)
 
 # F3 gate: price to summon AGAIN after the free first summon. This is a
 # FIXED gate price (independent of the current creature's rarity tier) —
@@ -571,6 +598,7 @@ class TerramonState(rx.State):
     release_ritual_auto_verify: bool = False
     release_ritual_verify_attempts: int = 0
     pending_words: str = ""
+    ritual_stars_pending: bool = False  # Stars invoice open — gate the button, never complete on click
 
     # «Зажечь свечу» — WebLN candle ritual on a released creature's birthplace.
     # 500-sat keysend zap from the player's browser wallet (Alby extension);
@@ -1670,6 +1698,7 @@ class TerramonState(rx.State):
             )
             if _ALBY.verify_payment(req):
                 self.release_ritual_paid = True
+                self.ritual_stars_pending = False  # defensive: both rails raced
                 self.release_ritual_auto_verify = False
                 self.release_ritual_verify_attempts = 0
                 words = self.pending_words
@@ -1685,16 +1714,57 @@ class TerramonState(rx.State):
 
     @rx.event
     def pay_ritual_stars(self):
-        """Stars rail for the ritual — optimistic record (openInvoice has
-        no server callback in this MVP; mirrors the Stars mint)."""
-        self.release_ritual_paid = True
-        self.release_ritual_auto_verify = False
-        words = self.pending_words
-        self.show_ritual_payment = False
-        self._complete_ritual_release(words)
-        return rx.call_script(
-            f"if(window.Telegram?.WebApp?.openInvoice)Telegram.WebApp.openInvoice('{_STARS_INVOICE_URL}');"
+        """Stars rail for the ritual — payment-GATED (openInvoice callback).
+
+        Opens the Telegram Stars invoice and waits for the REAL 'paid'
+        status: complete_releases is only ever incremented in
+        on_ritual_stars_status, never optimistically on click. While the
+        invoice is open, ritual_stars_pending replaces the button with a
+        waiting hint. Plain (non-generator) event: the pending delta must
+        apply immediately while openInvoice is open, and the resolved
+        callback value lands in on_ritual_stars_status (Reflex 0.9.x
+        call_script callback= delivery).
+        """
+        if self.ritual_stars_pending:
+            return
+        self.ritual_stars_pending = True
+        self.release_ritual_auto_verify = False  # one rail at a time — stops the Lightning poller's rx.moment
+        self.agent_message = (
+            "⭐ Stars-ритуал: оплати в Telegram — слова уйдут в мир после оплаты."
         )
+        return rx.call_script(
+            _RITUAL_STARS_JS.replace("__INVOICE_URL__", _STARS_INVOICE_URL),
+            callback=TerramonState.on_ritual_stars_status,
+        )
+
+    @rx.event
+    def on_ritual_stars_status(self, status: str):
+        """openInvoice callback — the ONLY path that completes the Stars ritual.
+
+        'paid' → words reach the world, complete_releases counts (the
+        depth win is PAID by construction). 'cancelled' → the panel stays
+        open, words stay with the player. 'failed'/'unavailable' (incl.
+        None/empty) → panel stays open, Lightning or the free path remain.
+        """
+        self.ritual_stars_pending = False
+        if status == "paid":
+            self.release_ritual_paid = True
+            self.show_ritual_payment = False
+            self._complete_ritual_release(self.pending_words)
+            self.agent_message = (
+                "⭐ Ритуал оплачен — слова ушли в мир. Отпущено в мир: +1"
+            )
+        elif status == "cancelled":
+            self.agent_message = (
+                "⭐ Ритуал не оплачен (отменено) — слова остались с тобой. "
+                "Можно повторить или отпустить без ритуала."
+            )
+        else:
+            # 'failed' / 'unavailable' / None / '' — keep the panel open.
+            self.agent_message = (
+                "⭐ Stars-ритуал не прошёл — используй ⚡ Lightning (3000 sats) "
+                "или отпусти без ритуала."
+            )
 
     @rx.event
     def release_without_ritual(self):
@@ -1702,6 +1772,7 @@ class TerramonState(rx.State):
         self.show_ritual_payment = False
         self.release_ritual_auto_verify = False
         self.release_ritual_verify_attempts = 0
+        self.ritual_stars_pending = False
         self.pending_words = ""
         self._do_release("", complete=False)
 
@@ -4004,18 +4075,25 @@ def ritual_payment_panel() -> rx.Component:
                     ),
                 ),
                 rx.text("— or —", font_size="0.65em", color="#52525b"),
-                rx.button(
-                    rx.hstack(
-                        rx.text("⭐", font_size="1em"),
-                        rx.text(
-                            "Оплатить ритуал · " + str(RITUAL_RELEASE_STARS) + " Stars",
-                            font_size="0.8em",
-                        ),
-                        spacing="1",
+                rx.cond(
+                    TerramonState.ritual_stars_pending,
+                    rx.text(
+                        "⏳ Ожидание оплаты Stars…",
+                        font_size="0.75em", color="#9ca3af", text_align="center",
                     ),
-                    on_click=TerramonState.pay_ritual_stars,
-                    variant="solid", size="2", color_scheme="amber",
-                    width="100%", _hover={"transform": "scale(1.02)"},
+                    rx.button(
+                        rx.hstack(
+                            rx.text("⭐", font_size="1em"),
+                            rx.text(
+                                "Оплатить ритуал · " + str(RITUAL_RELEASE_STARS) + " Stars",
+                                font_size="0.8em",
+                            ),
+                            spacing="1",
+                        ),
+                        on_click=TerramonState.pay_ritual_stars,
+                        variant="solid", size="2", color_scheme="amber",
+                        width="100%", _hover={"transform": "scale(1.02)"},
+                    ),
                 ),
                 rx.button(
                     "💨 Отпустить без ритуала (слова останутся с тобой)",
