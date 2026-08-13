@@ -308,6 +308,11 @@ GATE_SUMMON_STARS = 1          # Telegram Stars rail
 # polling until settle or gives up with a clear manual-fallback marker.
 LIGHTNING_VERIFY_INTERVAL_MS = 6000   # rx.moment tick interval for auto-verify
 LIGHTNING_VERIFY_MAX_ATTEMPTS = 30    # ~3 min of auto-polling, then manual fallback
+# Release-ritual auto-verify: same bounded poller as the mint gate, but the
+# ritual BOLT11 also EXPIRES (~1h Alby Hub default) with no in-app way to
+# re-issue it — a dead-end. So the bound hands off to BOTH manual fallbacks:
+# «✅ I've paid — verify» and «🔄 Новый инвойс» (refresh_ritual_invoice).
+RITUAL_RELEASE_VERIFY_MAX_ATTEMPTS = 30    # ~3 min of ritual auto-polling, then manual verify + invoice refresh fallback
 
 # GameLoop owns progression + reflection; SummonService persists each turn.
 _SERVICE = SummonService(
@@ -1724,12 +1729,70 @@ class TerramonState(rx.State):
                 self.show_ritual_payment = False
                 self._complete_ritual_release(words)
             else:
-                self.release_ritual_verify_attempts += 1
-                if not self.release_ritual_auto_verify:
+                if self.release_ritual_auto_verify:
+                    # Auto poll tick (rx.moment passes a datetime): count it
+                    # and keep polling WITHOUT touching agent_message — the
+                    # KPI probe parses the «⚡ Ритуал отпускания:» marker.
+                    # Give up gracefully at the bound: the manual button and
+                    # «🔄 Новый инвойс» remain as the expiry escape hatch.
+                    self.release_ritual_verify_attempts += 1
+                    if self.release_ritual_verify_attempts >= RITUAL_RELEASE_VERIFY_MAX_ATTEMPTS:
+                        self.release_ritual_auto_verify = False
+                        self.release_ritual_verify_attempts = RITUAL_RELEASE_VERIFY_MAX_ATTEMPTS
+                        self.agent_message = (
+                            "⏳ Платёж не обнаружен — если ты оплатил, нажми "
+                            "«✅ I've paid — verify», либо создай новый инвойс."
+                        )
+                else:
                     self.agent_message = "⏳ Ритуал не подтверждён — проверь, что инвойс оплачен."
         except Exception as e:
             log.warning(f"ritual verify failed: {e}")
-            self.agent_message = f"⚡ Проверка не удалась: {getattr(e, 'message', e)}"
+            if self.release_ritual_auto_verify:
+                # Same bounded poll path as not-settled: never clobber the
+                # invoice marker while polling; give up gracefully at the bound.
+                self.release_ritual_verify_attempts += 1
+                if self.release_ritual_verify_attempts >= RITUAL_RELEASE_VERIFY_MAX_ATTEMPTS:
+                    self.release_ritual_auto_verify = False
+                    self.release_ritual_verify_attempts = RITUAL_RELEASE_VERIFY_MAX_ATTEMPTS
+                    self.agent_message = (
+                        "⏳ Платёж не обнаружен — если ты оплатил, нажми "
+                        "«✅ I've paid — verify», либо создай новый инвойс."
+                    )
+            else:
+                self.agent_message = f"⚡ Проверка не удалась: {getattr(e, 'message', e)}"
+
+    @rx.event
+    def refresh_ritual_invoice(self):
+        """Escape hatch: re-issue the ritual BOLT11 when it expired (~1h Alby
+        Hub default) or the bounded poller gave up. If the OLD invoice
+        actually settled after the poller stopped, complete the ritual
+        instead of regenerating over a paid payment — a paid win is never
+        lost (mirrors the mint path's settle-on-verify)."""
+        if self.release_ritual_ref and _ALBY.url:
+            try:
+                from terramon.ports.payment_port import PaymentRequest, PaymentMethod
+                req = PaymentRequest(
+                    id=self.release_ritual_ref,
+                    method=PaymentMethod.LIGHTNING,
+                    amount_sats=RITUAL_RELEASE_SATS,
+                    destination=self.release_ritual_invoice,
+                    memo="terramon",
+                    verification_ref=self.release_ritual_ref,
+                )
+                if _ALBY.verify_payment(req):
+                    self.release_ritual_paid = True
+                    self.ritual_stars_pending = False
+                    self.release_ritual_auto_verify = False
+                    self.release_ritual_verify_attempts = 0
+                    self.show_ritual_payment = False
+                    self._complete_ritual_release(self.pending_words)
+                    return
+            except Exception as e:
+                log.warning("ritual refresh pre-verify failed: %s", e)
+        # No ref, Alby unconfigured, old invoice unpaid, or pre-verify
+        # errored: regenerate BOLT11 + QR + ref. create_ritual_invoice
+        # already resets attempts to 0 and re-arms release_ritual_auto_verify.
+        self.create_ritual_invoice()
 
     @rx.event
     def pay_ritual_stars(self):
@@ -4091,14 +4154,29 @@ def ritual_payment_panel() -> rx.Component:
                             rx.text(
                                 "⏳ Auto-checking payment… "
                                 + TerramonState.release_ritual_verify_attempts.to_string()
-                                + "/30",
+                                + "/" + str(RITUAL_RELEASE_VERIFY_MAX_ATTEMPTS),
                                 font_size="0.7em", color="#9ca3af",
                             ),
-                            rx.button(
-                                "✅ I've paid — verify",
-                                on_click=TerramonState.verify_release_ritual,
-                                variant="solid", size="2", color_scheme="yellow",
-                                width="100%", _hover={"transform": "scale(1.02)"},
+                            rx.vstack(
+                                rx.button(
+                                    "✅ I've paid — verify",
+                                    on_click=TerramonState.verify_release_ritual,
+                                    variant="solid", size="2", color_scheme="yellow",
+                                    width="100%", _hover={"transform": "scale(1.02)"},
+                                ),
+                                rx.button(
+                                    "🔄 Новый инвойс",
+                                    on_click=TerramonState.refresh_ritual_invoice,
+                                    variant="soft", size="1", color_scheme="gray",
+                                    width="100%",
+                                ),
+                                rx.text(
+                                    "Инвойс жив ~1 час — если оплата не прошла, создай новый.",
+                                    font_size="0.65em", color="#6b7280", text_align="center",
+                                ),
+                                spacing="2",
+                                align="center",
+                                width="100%",
                             ),
                         ),
                         # Hidden periodic poller — mirrors the lightning gate:
