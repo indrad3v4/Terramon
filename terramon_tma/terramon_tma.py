@@ -292,6 +292,13 @@ _STARS_INVOICE_URL = os.environ.get(
     "https://t.me/terramon_bot/TERRAMON_STAR_INVOICE",
 )
 
+# The Stars ritual rail is LIVE only when the owner set a REAL invoice
+# link (BotFather → Settings → Payments → Stars). The default is a dead
+# placeholder URL — openInvoice on it shows a Telegram error, a dead-end
+# on the ONLY path to the paid win. Gate: the panel shows an honest
+# disabled state instead of a clickable dead button.
+_STARS_RAIL_LIVE = bool(os.environ.get("TERRAMON_STARS_INVOICE_URL"))
+
 # F3 gate: price to summon AGAIN after the free first summon. This is a
 # FIXED gate price (independent of the current creature's rarity tier) —
 # previously the gate showed price_sats of the LAST summoned creature, which
@@ -1807,6 +1814,15 @@ class TerramonState(rx.State):
         callback value lands in on_ritual_stars_status (Reflex 0.9.x
         call_script callback= delivery).
         """
+        if not _STARS_RAIL_LIVE:
+            # Honest dead-end guard: never call openInvoice with the
+            # placeholder URL (Telegram would show an error). Lightning
+            # remains the sacred rail.
+            self.agent_message = (
+                "⭐ Stars-рельса ещё не настроена владельцем — "
+                "используй ⚡ Lightning (3000 sats) или отпусти без ритуала."
+            )
+            return
         if self.ritual_stars_pending:
             return
         self.ritual_stars_pending = True
@@ -3196,7 +3212,14 @@ def creature_care_panel() -> rx.Component:
                                         font_style="italic", text_align="center"),
                                 rx.fragment(),
                             ),
-                            rx.text("Поделись: я отпустил свою мысль",
+                            rx.button(
+                                "📤 Поделиться отпусканием",
+                                on_click=TerramonState.share_creature,
+                                variant="soft", size="2", color_scheme="green",
+                                width="100%",
+                                _hover={"transform": "scale(1.02)"},
+                            ),
+                            rx.text("Поделись: я отпустил свою мысль — пусть мир узнает.",
                                     font_size="0.65em", color="#6b7280",
                                     font_style="italic", text_align="center"),
                             spacing="1",
@@ -4200,25 +4223,48 @@ def ritual_payment_panel() -> rx.Component:
                     ),
                 ),
                 rx.text("— or —", font_size="0.65em", color="#52525b"),
-                rx.cond(
-                    TerramonState.ritual_stars_pending,
-                    rx.text(
-                        "⏳ Ожидание оплаты Stars…",
-                        font_size="0.75em", color="#9ca3af", text_align="center",
-                    ),
-                    rx.button(
-                        rx.hstack(
-                            rx.text("⭐", font_size="1em"),
-                            rx.text(
-                                "Оплатить ритуал · " + str(RITUAL_RELEASE_STARS) + " Stars",
-                                font_size="0.8em",
-                            ),
-                            spacing="1",
+                (
+                    rx.cond(
+                        TerramonState.ritual_stars_pending,
+                        rx.text(
+                            "⏳ Ожидание оплаты Stars…",
+                            font_size="0.75em", color="#9ca3af", text_align="center",
                         ),
-                        on_click=TerramonState.pay_ritual_stars,
-                        variant="solid", size="2", color_scheme="amber",
-                        width="100%", _hover={"transform": "scale(1.02)"},
-                    ),
+                        rx.button(
+                            rx.hstack(
+                                rx.text("⭐", font_size="1em"),
+                                rx.text(
+                                    "Оплатить ритуал · " + str(RITUAL_RELEASE_STARS) + " Stars",
+                                    font_size="0.8em",
+                                ),
+                                spacing="1",
+                            ),
+                            on_click=TerramonState.pay_ritual_stars,
+                            variant="solid", size="2", color_scheme="amber",
+                            width="100%", _hover={"transform": "scale(1.02)"},
+                        ),
+                    )
+                    if _STARS_RAIL_LIVE
+                    else rx.vstack(
+                        rx.button(
+                            rx.hstack(
+                                rx.text("⭐", font_size="1em"),
+                                rx.text(
+                                    "Оплатить ритуал · " + str(RITUAL_RELEASE_STARS) + " Stars — скоро",
+                                    font_size="0.8em",
+                                ),
+                                spacing="1",
+                            ),
+                            disabled=True,
+                            variant="soft", size="2", color_scheme="gray",
+                            width="100%",
+                        ),
+                        rx.text(
+                            "Stars-инвойс ещё не подключён — используй ⚡ Lightning.",
+                            font_size="0.65em", color="#6b7280", text_align="center",
+                        ),
+                        spacing="1", align="center", width="100%",
+                    )
                 ),
                 rx.button(
                     "💨 Отпустить без ритуала (слова останутся с тобой)",

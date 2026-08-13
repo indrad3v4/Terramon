@@ -104,3 +104,15 @@ def test_tma_depth_win_contract_preserved() -> None:
     is only called in the complete branch)."""
     assert "record_complete_release(" in _TMA_SRC
     assert "self.complete_releases = int(_LOOP.progress.complete_releases)" in _TMA_SRC
+
+
+def test_release_receipt_has_share_cta() -> None:
+    """The release receipt (the released_just_now cond) carries a share
+    CTA wired to share_creature — the M6 share loop reaches the just-
+    released player right at the peak emotional moment. The KPI probe's
+    receipt marker («отпустил свою мысль») must survive, and the
+    released_just_now gate must stay intact."""
+    assert "📤 Поделиться отпусканием" in _TMA_SRC
+    assert "on_click=TerramonState.share_creature" in _TMA_SRC
+    assert "отпустил свою мысль" in _TMA_SRC
+    assert "released_just_now" in _TMA_SRC

@@ -723,7 +723,8 @@ def run_depth_release_probe(browser, candidate_label="depth-release"):
                    "ritual_invoice_marker": False,
                    "ritual_free_release_clicked": False,
                    "receipt_seen": False,
-                   "receipt_snippet": None, "complete_before": None,
+                   "receipt_snippet": None, "free_release_receipt_seen": False,
+                   "complete_before": None,
                    "complete_after": None, "complete_delta": None,
                    "error": None}
     probe_ctx = None
@@ -962,6 +963,25 @@ def run_depth_release_probe(browser, candidate_label="depth-release"):
             free_btn.click(timeout=4000)
             depth_probe["ritual_free_release_clicked"] = True
             probe_page.wait_for_timeout(1500)
+            # Honest follow-up: after the free legacy release the app should
+            # render the release receipt (✓ Отпущено / quoted words / hint).
+            # Bounded 10s poll, non-fatal — proves the win-moment UI (incl.
+            # the «📤 Поделиться отпусканием» CTA) renders live on prod.
+            free_receipt_markers = ("✓ Отпущено", "отпустил свою мысль")
+            free_poll_start = time.monotonic()
+            free_deadline = free_poll_start + 10.0
+            while time.monotonic() < free_deadline:
+                free_body = probe_page.locator("body").inner_text()
+                if any(m in free_body for m in free_receipt_markers):
+                    print(f"[depth-probe:{candidate_label}] free-release receipt "
+                          f"appeared after {time.monotonic() - free_poll_start:.1f}s "
+                          f"(10s poll)")
+                    break
+                probe_page.wait_for_timeout(1000)
+            depth_probe["free_release_receipt_seen"] = any(
+                m in probe_page.locator("body").inner_text()
+                for m in free_receipt_markers
+            )
         depth_probe["complete_after"] = fetch_health_full().get(
             "complete_releases")
         if isinstance(depth_probe["complete_before"], int) and isinstance(
@@ -1347,7 +1367,7 @@ with sync_playwright() as p:
     print(f"complete_releases_after: {depth_release_probe.get('complete_after')}  (from /health json complete_releases, read after the full release ritual)")
     print(f"complete_releases_delta: {depth_release_probe.get('complete_delta')}  (0->1 = the depth win-path is REACHABLE on prod: ONE complete release with final words + real geo = 100% of the win, Lens #97 reframe)")
     print(f"depth_win_achieved: {depth_win_achieved}  (True = /health complete_releases incremented by this run's release — the authoritative M3 signal, NOT just UI text)")
-    print(f"depth_release_probe: {json.dumps(depth_release_probe, ensure_ascii=False)}  (depth-win release ritual on prod: fresh player -> summon run-unique English Lover thought -> Care tab -> 2x '✦ EVOLVE' (stage 2, no probability gate) -> '💨 Отпустить' dialog -> final words 'Прощай, страх. Свободен.' + real geo (⟳) -> confirm; receipt_seen = '✓ Отпущено:' / quoted final words / 'отпустил свою мысль' in the body after confirm — session-only UI markers, the always-visible 'Отпущено в мир: N' progress line is NOT a receipt proof; honest note: creates exactly ONE real released seed on prod per run)")
+    print(f"depth_release_probe: {json.dumps(depth_release_probe, ensure_ascii=False)}  (depth-win release ritual on prod: fresh player -> summon run-unique English Lover thought -> Care tab -> 2x '✦ EVOLVE' (stage 2, no probability gate) -> '💨 Отпустить' dialog -> final words 'Прощай, страх. Свободен.' + real geo (⟳) -> confirm; receipt_seen = '✓ Отпущено:' / quoted final words / 'отпустил свою мысль' in the body after confirm; free_release_receipt_seen = same markers polled up to 10s AFTER the free-legacy release click (win-moment receipt + share CTA render check) — session-only UI markers, the always-visible 'Отпущено в мир: N' progress line is NOT a receipt proof; honest note: creates exactly ONE real released seed on prod per run)")
     mc = fetch_mint_count()
     print(f"mint_count_health: {mc}  (from /health, json mint_count)")
     health_full = fetch_health_full()

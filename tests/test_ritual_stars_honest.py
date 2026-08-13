@@ -94,6 +94,48 @@ def test_stars_ritual_free_path_still_resets() -> None:
     assert "ritual_stars_pending = False" in body
 
 
+def test_stars_ritual_rail_live_flag() -> None:
+    """The Stars rail is LIVE only when the owner set a real invoice URL
+    (TERRAMON_STARS_INVOICE_URL) — a placeholder URL must never arm it."""
+    assert (
+        '_STARS_RAIL_LIVE = bool(os.environ.get("TERRAMON_STARS_INVOICE_URL"))'
+        in _TMA_SRC
+    )
+    line = next(
+        ln for ln in _TMA_SRC.splitlines()
+        if ln.startswith("_STARS_RAIL_LIVE =")
+    )
+    assert "bool(os.environ.get" in line
+    assert '"TERRAMON_STARS_INVOICE_URL"' in line
+
+
+def test_pay_ritual_stars_guarded_when_rail_offline() -> None:
+    """Offline rail → the click is an honest dead-end guard: never call
+    openInvoice with the placeholder URL, never arm the pending flag.
+    Lightning remains the sacred rail."""
+    body = _method_body(_TMA_SRC, "pay_ritual_stars")
+    assert "if not _STARS_RAIL_LIVE:" in body
+    assert "Stars-рельса ещё не настроена" in body
+    assert body.index("if not _STARS_RAIL_LIVE:") < body.index(
+        "ritual_stars_pending = True"
+    )
+
+
+def test_ritual_panel_stars_disabled_state_when_rail_offline() -> None:
+    """Offline rail → the panel's Stars section renders a disabled
+    placeholder («Stars — скоро») instead of a live openInvoice button;
+    the live branch strings must survive byte-identical."""
+    body = _method_body(_TMA_SRC, "ritual_payment_panel")
+    assert "_STARS_RAIL_LIVE" in body
+    assert "— скоро" in body  # disabled placeholder label
+    assert "Stars-инвойс ещё не подключён" in body
+    assert "disabled=True" in body
+    # The live branch survives unchanged:
+    assert "Ожидание оплаты Stars" in body
+    assert "Оплатить ритуал · " in body
+    assert "on_click=TerramonState.pay_ritual_stars" in body
+
+
 # ── B. Functional: only a real 'paid' callback completes the release ───
 
 class _FakeMemory:
@@ -122,6 +164,9 @@ def _stars_state(monkeypatch: pytest.MonkeyPatch):
     memory = _FakeMemory()
     monkeypatch.setattr(tma, "_LOOP", SimpleNamespace(progress=progress))
     monkeypatch.setattr(tma, "_MEMORY", memory)
+    # Functional section simulates a LIVE Stars rail (owner set
+    # TERRAMON_STARS_INVOICE_URL) — the click path past the dead-end guard.
+    monkeypatch.setattr(tma, "_STARS_RAIL_LIVE", True)
 
     state = tma.TerramonState()
     state.agent = "Sage"
@@ -200,6 +245,22 @@ def test_stars_click_sets_pending_without_completing(monkeypatch) -> None:
             assert "on_ritual_stars_status" in spec_text
         # else: EventSpec not stringifiable in this Reflex build —
         # wiring check skipped (state invariants above still hold).
+
+
+def test_stars_click_guarded_when_rail_offline(monkeypatch) -> None:
+    """With no real Stars invoice link configured the click must NOT open
+    the dead placeholder invoice: early return, no pending flag, honest
+    message pointing at the Lightning rail (dead-end removal)."""
+    tma, state, memory = _stars_state(monkeypatch)
+    monkeypatch.setattr(tma, "_STARS_RAIL_LIVE", False)
+
+    spec = state.pay_ritual_stars()
+
+    assert spec is None  # no openInvoice wiring on a dead rail
+    assert state.ritual_stars_pending is False  # never armed
+    assert state.release_ritual_auto_verify is True  # Lightning poller untouched
+    assert "не настроена" in state.agent_message
+    assert memory.calls == []  # nothing persisted
 
 
 def test_free_release_clears_pending(monkeypatch) -> None:
